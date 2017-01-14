@@ -19,12 +19,13 @@
 open Location
 open Asttypes
 open Longident
-open Parsetree
-open Ast_helper
-open Docstrings
+open Parsetree_alpha.S
+open Ast_helper_alpha
+open Docstrings_alpha
 
 let mktyp d = Typ.mk ~loc:(symbol_rloc()) d
 let mkpat d = Pat.mk ~loc:(symbol_rloc()) d
+let mkcopat d = CoPat.mk ~loc:(symbol_rloc()) d
 let mkexp d = Exp.mk ~loc:(symbol_rloc()) d
 let mkmty ?attrs d = Mty.mk ~loc:(symbol_rloc()) ?attrs d
 let mksig d = Sig.mk ~loc:(symbol_rloc()) d
@@ -477,6 +478,7 @@ let package_type_of_module_type pmty =
 %token BEGIN
 %token <char> CHAR
 %token CLASS
+%token COFUNCTION
 %token COLON
 %token COLONCOLON
 %token COLONEQUAL
@@ -654,19 +656,19 @@ The precedences must be listed from low to high.
 /* Entry points */
 
 %start implementation                   /* for implementation files */
-%type <Parsetree.structure> implementation
+%type <Parsetree_alpha.S.structure> implementation
 %start interface                        /* for interface files */
-%type <Parsetree.signature> interface
+%type <Parsetree_alpha.S.signature> interface
 %start toplevel_phrase                  /* for interactive use */
-%type <Parsetree.toplevel_phrase> toplevel_phrase
+%type <Parsetree_alpha.S.toplevel_phrase> toplevel_phrase
 %start use_file                         /* for the #use directive */
-%type <Parsetree.toplevel_phrase list> use_file
+%type <Parsetree_alpha.S.toplevel_phrase list> use_file
 %start parse_core_type
-%type <Parsetree.core_type> parse_core_type
+%type <Parsetree_alpha.S.core_type> parse_core_type
 %start parse_expression
-%type <Parsetree.expression> parse_expression
+%type <Parsetree_alpha.S.expression> parse_expression
 %start parse_pattern
-%type <Parsetree.pattern> parse_pattern
+%type <Parsetree_alpha.S.pattern> parse_pattern
 %%
 
 /* Entry points */
@@ -1368,6 +1370,8 @@ expr:
       { mkexp_attrs (Pexp_open($3, mkrhs $5 5, $7)) $4 }
   | FUNCTION ext_attributes opt_bar match_cases
       { mkexp_attrs (Pexp_function(List.rev $4)) $2 }
+  | COFUNCTION COLON core_type BAR comatch_cases
+      { mkexp(Pexp_cofunction ($3,List.rev $5))}
   | FUN ext_attributes labeled_simple_pattern fun_def
       { let (l,o,p) = $3 in
         mkexp_attrs (Pexp_fun(l, o, p, $4)) $2 }
@@ -1670,6 +1674,14 @@ match_case:
   | pattern MINUSGREATER DOT
       { Exp.case $1 (Exp.unreachable ~loc:(rhs_loc 3) ())}
 ;
+comatch_cases:
+    comatch_case                   { [ $1 ] }
+  | comatch_cases BAR comatch_case { $3::$1 }
+;
+comatch_case:
+    simple_copattern MINUSGREATER seq_expr
+      { Exp.cocase $1 $3 }
+;
 fun_def:
     MINUSGREATER seq_expr
       { $2 }
@@ -1729,8 +1741,18 @@ opt_type_constraint:
   | /* empty */ { None }
 ;
 
-/* Patterns */
+/* Copatterns and Patterns */
 
+simple_copattern:
+  | LIDENT                       { mkcopat(Pcopat_hole (mkrhs $1 1)) }
+  | simple_copattern HASH UIDENT { mkcopat(Pcopat_destructor ($1,mkrhs $3 3)) }
+/*  | LPAREN copattern RPAREN      { $2 }
+
+copattern:
+  | LIDENT                       { mkcopat(Pcopat_hole (mkrhs $1 1)) }
+  | simple_copattern HASH UIDENT { mkcopat(Pcopat_destructor ($1,mkrhs $3 3)) }
+  | copattern simple_pattern     { mkcopat(Pcopat_application ($1,mkrhs $2 2)) }
+*/
 pattern:
   | pattern AS val_ident
       { mkpat(Ppat_alias($1, mkrhs $3 3)) }
@@ -1925,7 +1947,7 @@ type_declarations:
 ;
 
 type_declaration:
-    TYPE ext_attributes nonrec_flag optional_type_parameters LIDENT
+    TYPE ext_attributes nonrec_flag optional_type_parameters type_lident
     type_kind constraints post_item_attributes
       { let (kind, priv, manifest) = $6 in
         let (ext, attrs) = $2 in
@@ -1937,12 +1959,16 @@ type_declaration:
           ($3, ty, ext) }
 ;
 and_type_declaration:
-    AND attributes optional_type_parameters LIDENT type_kind constraints
+    AND attributes optional_type_parameters type_lident type_kind constraints
     post_item_attributes
       { let (kind, priv, manifest) = $5 in
           Type.mk (mkrhs $4 4) ~params:$3 ~cstrs:(List.rev $6)
             ~kind ~priv ?manifest ~attrs:($2@$7) ~loc:(symbol_rloc ())
             ~text:(symbol_text ()) ~docs:(symbol_docs ()) }
+;
+type_lident:
+    BANG LIDENT                { "!" ^ $2 }
+  | LIDENT                     { $1 }
 ;
 constraints:
         constraints CONSTRAINT constrain        { $3 :: $1 }
@@ -1969,6 +1995,8 @@ type_kind:
       { (Ptype_open, Public, Some $2) }
   | EQUAL core_type EQUAL private_flag LBRACE label_declarations RBRACE
       { (Ptype_record $6, $4, Some $2) }
+  | EQUAL private_flag LBRACE colabel_declarations RBRACE
+      { (Ptype_cotype $4, $2, None) }
 ;
 optional_type_parameters:
     /*empty*/                                   { [] }
@@ -2089,7 +2117,30 @@ label_declaration_semi:
          ~loc:(symbol_rloc()) ~info
       }
 ;
-
+colabel_declarations:
+    colabel_declaration                             { [$1] }
+  | colabel_declaration_semi                        { [$1] }
+  | colabel_declaration_semi colabel_declarations   { $1 :: $2 }
+;
+colabel_declaration:
+    colabel COLON poly_type_no_attr attributes
+      {
+       Type.cofield (mkrhs $1 1) $3 ~attrs:$4
+         ~loc:(symbol_rloc()) ~info:(symbol_info ())
+      }
+;
+colabel_declaration_semi:
+    colabel COLON poly_type_no_attr attributes SEMI attributes
+      {
+       let info =
+         match rhs_info 4 with
+         | Some _ as info_before_semi -> info_before_semi
+         | None -> symbol_info ()
+       in
+       Type.cofield (mkrhs $1 1) $3 ~attrs:($4 @ $6)
+         ~loc:(symbol_rloc()) ~info
+      }
+;
 /* Type Extensions */
 
 str_type_extension:
@@ -2353,6 +2404,9 @@ label:
     LIDENT                                      { $1 }
 ;
 
+colabel:
+  | UIDENT {$1}
+;
 /* Constants */
 
 constant:
@@ -2434,6 +2488,7 @@ label_longident:
 ;
 type_longident:
     LIDENT                                      { Lident $1 }
+  | BANG LIDENT                                 { Lident ("!" ^ $2) }
   | mod_ext_longident DOT LIDENT                { Ldot($1, $3) }
 ;
 mod_longident:

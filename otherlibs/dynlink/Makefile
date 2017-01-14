@@ -45,6 +45,7 @@ COMPILEROBJS=\
   ../../utils/terminfo.cmo ../../utils/warnings.cmo \
   ../../parsing/asttypes.cmi \
   ../../parsing/location.cmo ../../parsing/longident.cmo \
+  ../../parsing/docstrings_alpha.cmo ../../parsing/ast_helper_alpha.cmo \
   ../../parsing/docstrings.cmo ../../parsing/ast_helper.cmo \
   ../../parsing/ast_mapper.cmo ../../parsing/ast_iterator.cmo \
   ../../parsing/attr_helper.cmo \

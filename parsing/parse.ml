@@ -35,14 +35,14 @@ let maybe_skip_phrase lexbuf =
   then ()
   else skip_phrase lexbuf
 
-let wrap parsing_fun lexbuf =
+let wrap trans parsing_fun lexbuf =
   try
-    Docstrings.init ();
+    Docstrings_alpha.init ();
     Lexer.init ();
     let ast = parsing_fun Lexer.token lexbuf in
     Parsing.clear_parser();
-    Docstrings.warn_bad_docstrings ();
-    ast
+    Docstrings_alpha.warn_bad_docstrings ();
+    trans ast
   with
   | Lexer.Error(Lexer.Illegal_character _, _) as err
     when !Location.input_name = "//toplevel//"->
@@ -58,10 +58,10 @@ let wrap parsing_fun lexbuf =
       then maybe_skip_phrase lexbuf;
       raise(Syntaxerr.Error(Syntaxerr.Other loc))
 
-let implementation = wrap Parser.implementation
-and interface = wrap Parser.interface
-and toplevel_phrase = wrap Parser.toplevel_phrase
-and use_file = wrap Parser.use_file
-and core_type = wrap Parser.parse_core_type
-and expression = wrap Parser.parse_expression
-and pattern = wrap Parser.parse_pattern
+let implementation = wrap MNTSA.structure Parser.implementation
+and interface = wrap MNTSA.signature Parser.interface
+and toplevel_phrase = wrap MNTSA.toplevel_phrase Parser.toplevel_phrase
+and use_file = wrap (List.map MNTSA.toplevel_phrase) Parser.use_file
+and core_type = wrap MNTSA.core_type Parser.parse_core_type
+and expression = wrap MNTSA.expression Parser.parse_expression
+and pattern = wrap MNTSA.pattern Parser.parse_pattern
