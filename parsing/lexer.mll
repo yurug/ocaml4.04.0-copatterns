@@ -42,7 +42,7 @@ let keyword_table =
     "assert", ASSERT;
     "begin", BEGIN;
     "class", CLASS;
-    "cofunction", COFUNCTION;
+    "comatch", COMATCH;
     "constraint", CONSTRAINT;
     "do", DO;
     "done", DONE;

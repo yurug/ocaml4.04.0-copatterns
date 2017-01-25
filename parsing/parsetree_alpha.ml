@@ -264,8 +264,8 @@ module S = struct
     | Pexp_function of case list
     (* function P1 -> E1 | ... | Pn -> En *)
 
-    | Pexp_cofunction of core_type * cocase list
-    (* cofunction : T | Q1 -> E1 | ... | Qn -> En *)
+    | Pexp_comatch of string loc * core_type * cocase list
+    (* comatch x : T with Q1 -> E1 | ... | Qn -> En *)
 
     | Pexp_fun of arg_label * expression option * pattern * expression
     (* fun P -> E1                          (Simple, None)

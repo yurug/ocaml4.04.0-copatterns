@@ -478,7 +478,7 @@ let package_type_of_module_type pmty =
 %token BEGIN
 %token <char> CHAR
 %token CLASS
-%token COFUNCTION
+%token COMATCH
 %token COLON
 %token COLONCOLON
 %token COLONEQUAL
@@ -1370,8 +1370,8 @@ expr:
       { mkexp_attrs (Pexp_open($3, mkrhs $5 5, $7)) $4 }
   | FUNCTION ext_attributes opt_bar match_cases
       { mkexp_attrs (Pexp_function(List.rev $4)) $2 }
-  | COFUNCTION COLON core_type BAR comatch_cases
-      { mkexp(Pexp_cofunction ($3,List.rev $5))}
+  | COMATCH val_ident COLON core_type WITH opt_bar comatch_cases
+      { mkexp(Pexp_comatch (mkrhs $2 2,$4,List.rev $7))}
   | FUN ext_attributes labeled_simple_pattern fun_def
       { let (l,o,p) = $3 in
         mkexp_attrs (Pexp_fun(l, o, p, $4)) $2 }
@@ -1744,8 +1744,8 @@ opt_type_constraint:
 /* Copatterns and Patterns */
 
 simple_copattern:
-  | LIDENT                       { mkcopat(Pcopat_hole (mkrhs $1 1)) }
-  | simple_copattern HASH UIDENT { mkcopat(Pcopat_destructor ($1,mkrhs $3 3)) }
+  | LIDENT                         { mkcopat(Pcopat_hole (mkrhs $1 1)) }
+  | simple_copattern HASH UIDENT   { mkcopat(Pcopat_destructor ($1,mkrhs $3 3)) }
 /*  | LPAREN copattern RPAREN      { $2 }
 
 copattern:
