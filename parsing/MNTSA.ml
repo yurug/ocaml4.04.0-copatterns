@@ -19,7 +19,7 @@ let map_option f m = match m with
 let map_fst f (a,b) = (f a, b)
 let map_snd g (a,b) = (a, g b)
 
-(* let ( >>= ) m f = List.fold_right (fun x acc -> f x @ acc) m [] *)
+let ( >>= ) m f = List.fold_right (fun x acc -> f x @ acc) m []
 
 (** {1 Transformation} *)
 
@@ -104,9 +104,12 @@ module Trans = struct
 
   let ty_variant td =
     let open S in
-    (* !Stream *)
+    (* Stream *)
+    let sname = String.uppercase_ascii td.ptype_name.txt in
+    let l = String.length sname in
+    let rname = String.sub sname 1 (pred l) in
     let uname = {
-      td.ptype_name with txt = String.uppercase_ascii td.ptype_name.txt
+      td.ptype_name with txt = rname
     } in
     (* -!stream *)
     let lid = {
@@ -158,10 +161,12 @@ module Trans = struct
     }
 
   let getters td lds =
-    (* !STREAM *)
+    (* Stream *)
+    let sname = String.uppercase_ascii td.S.ptype_name.txt in
+    let l = String.length sname in
+    let rname = String.sub sname 1 (pred l) in
     let uname = S.{             (* 2 *)
-        td.ptype_name
-        with txt = Longident.parse (String.uppercase_ascii td.ptype_name.txt)
+        td.ptype_name with txt = Longident.parse rname
       } in
     (* { dispatch = dispatch } *)
     let corr = [(dispatch_lid (), dispattern ())] in
@@ -775,23 +780,17 @@ and module_expr_desc = function
 
 (* Trying to debug *)
 
-and structure strs : structure =
-  let rec loop strs acc : structure list = match strs with
-    | [] -> List.rev acc
-    | str :: strs ->
-        let v = structure_item str in
-        loop strs (v::acc)
-  in List.flatten @@ loop strs []
+and structure strs = strs >>= structure_item
 
 and structure_item str = match structure_item_desc str.S.pstr_desc with
   | (pstr_desc,None) ->
       [{pstr_desc;pstr_loc = str.S.pstr_loc}]
-  | (pstr_desc,Some exps) ->
+  | (pstr_desc,Some gen) ->
       loc := str.S.pstr_loc;
       let str_items =
         List.map (fun pstr_desc ->
             { pstr_desc; pstr_loc = !loc }
-          ) exps
+          ) gen
       in {pstr_desc; pstr_loc = !loc} :: str_items
 
 and structure_item_desc = function
