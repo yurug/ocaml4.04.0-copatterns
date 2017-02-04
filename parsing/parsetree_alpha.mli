@@ -238,7 +238,6 @@ module S : sig
     | Pcopat_destructor  of copattern * string loc
     (* q.d *)
 
-
   (* Value expressions *)
 
   and expression =

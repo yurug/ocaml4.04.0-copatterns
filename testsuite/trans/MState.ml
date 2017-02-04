@@ -90,10 +90,10 @@ let push n : (codata,stack,unit) state =
   in State {dispatch}
 
 let rec tos : (codata,stack,int) state =
-  let rec dispatch : type o. (o query,stack,int) state -> o = function
+  let dispatch : type o. (o query,stack,int) state -> o = function
     | RunState -> function
-      | (x::xs) -> (x,x::xs)
-      | _ -> assert false
+        | (x::xs) -> (x,x::xs)
+        | _ -> assert false
   in State {dispatch}
 
 let ( *> ) m r = m >>= fun () -> r

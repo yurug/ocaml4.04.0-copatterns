@@ -7,8 +7,8 @@
 (**************************************************************************)
 
 open Asttypes
-open Parsetree_alpha
 open Parsetree
+open Parsetree_alpha
 
 (** {0 Helpers} *)
 
@@ -23,88 +23,198 @@ let ( >>= ) m f = List.fold_right (fun x acc -> f x @ acc) m []
 
 (** {1 Transformation} *)
 
-(* Both sides. *)
 
-let loc = ref Location.none
+(**************************************************************************)
+(*          Part 0. Linearisation of copattern matching                   *)
+(**************************************************************************)
 
-let myloc x = Location.mkloc x !loc
+(* Notes to myself :
+   - in a close future, needs to check alpha equivalence for patterns
+*)
 
-let codata_lid = Longident.parse "Pervasives.codata"
+module Linear = struct
 
-let codata =
-  let name = myloc codata_lid
-  in Ast_helper_alpha.Typ.constr name []
+  type lcopattern =
+    | QApp of S.pattern
+    | QDes of string loc
 
-let query_lid = Longident.parse "Pervasives.query"
+  let linearize q =
+    let rec loop acc q = match q.S.pcopat_desc with
+      | S.Pcopat_hole _ ->
+          acc
+      | S.Pcopat_application (q,p) ->
+          loop (QApp p :: acc) q
+      | S.Pcopat_destructor (q,d) ->
+          loop (QDes d :: acc) q
+    in loop [] q
 
-let query_ty res =
-  let name = myloc query_lid
-  in Ast_helper_alpha.Typ.constr name [res]
+  type linear_cocase = {
+    lhs : lcopattern list;
+    rhs : S.expression;
+  }
+
+  let linear_cocase {S.pcc_lhs;pcc_rhs} = {
+    lhs = linearize pcc_lhs;
+    rhs = pcc_rhs;
+  }
+
+  let insert key value xs =
+    let rec aux acc = function
+      | (k,v) :: xs when k.txt = key.txt ->
+          List.rev acc @ (k,v @ [value]) :: xs
+      | x :: xs ->
+          aux (x :: acc) xs
+      | [] ->
+          List.rev ((key,[value]) :: acc)
+    in aux [] xs
+
+  type qtree = {
+    id : string loc;            (* should a lcopattern in the future *)
+    children : leaf;
+  }
+
+  and leaf =
+    | Expr of S.expression
+    | QTrees of qtree list
+
+  let index acc c = match c.lhs with
+    | [] -> []
+    | QDes id :: qs -> insert id {c with lhs = qs} acc
+    | QApp _ :: _ -> failwith "QApp::todo"
+
+  let qtree id children = {id; children}
+
+  let ( >>= ) m f = List.fold_right (fun x acc -> f x @ acc) m []
+
+  let is_final q = q.lhs = []
+
+  let rec group (xs : linear_cocase list) =
+    List.fold_left index [] xs >>= fun (id,qs) ->
+    let (qs1,qs2) = List.partition is_final qs in
+    let res1 = List.map (fun q -> qtree id (Expr q.rhs)) qs1 in
+    if qs2 = [] then res1
+    else res1 @ [qtree id (QTrees (group qs2))]
+
+  let linearize_cocases cocases =
+    List.map linear_cocase cocases
+
+  (* DEBUG *)
+
+  let rec show_qt {id;children} =
+    Printf.sprintf "{id : %s; children = %s;}"
+      id.txt
+      (show_children children);
+
+  and show_children = function
+    | Expr _ -> "<expr>"
+    | QTrees qts -> String.concat ";" (List.map show_qt qts)
+
+  let show qts =
+    String.concat "\n" (List.map show_qt qts)
+
+  (* dummy escape the fatal warning *)
+  let _dummy = show
+
+end
 
 module Trans = struct
 
-  open Ast_helper_alpha
+  (* Some generators and common identifiers, functions.. *)
 
-  (* UTILITIES *)
-
-  (* [fresh_var ()] generates a new fresh type variable. *)
+  let mknoloc x = Location.mknoloc x
 
   let fresh_var =
     let i = ref 0 in
     fun () ->
       let x = char_of_int (!i mod 26 + 97) in
       incr i;
-      "*" ^ String.make 1 x
+      "~" ^ String.make 1 x
 
-  (* [myloc x ] with (x : ty) creates a new ty Location.t with
-     the global location reference.
-  *)
+  let fresh_fid =
+    let i = ref 0 in
+    fun () ->
+      incr i;
+      "__fid__" ^ string_of_int !i
 
-  let mk_pat pat = {
-    ppat_desc = pat;
-    ppat_loc = !loc;
-    ppat_attributes = [];
-  }
-
-  let mk_exp e = {
-    pexp_desc = e;
-    pexp_loc = !loc;
-    pexp_attributes = [];
-  }
-
-  let mk_fun p e = mk_exp (Pexp_fun (Nolabel, None, p, e))
-
-  let mk_vb pat exp = {
-    pvb_pat = pat;
-    pvb_expr = exp;
-    pvb_attributes = [];
-    pvb_loc = !loc;
-  }
-
-  (* Identifiers *)
-
-  (* Note: we use Pervasives.* for codata and query types to avoid that
-     they are shadowed by programmer-own-defined types. *)
-
+  let lid_map_last f = Longident.(function
+      | Lident s -> Lident (f s)
+      | Ldot (lid,s) -> Ldot (lid,f s)
+      | Lapply _ -> assert false
+    )
   let dispatch = "dispatch"
 
-  let dispattern () = mk_pat (Ppat_var (myloc dispatch))
+  let dispatch_id = mknoloc "dispatch"
 
-  let dispatch_id () = myloc dispatch
+  let dispatch_lid = mknoloc (Longident.parse dispatch)
 
-  let dispatch_lid () =
-    let id = dispatch_id () in
-    { id with txt = Longident.Lident dispatch }
+  let codata_lid = Longident.parse "Pervasives.codata"
+
+  let codata =
+    let name = mknoloc codata_lid
+    in Ast_helper_alpha.Typ.constr name []
+
+  let query_lid = Longident.parse "Pervasives.query"
+
+  (* [query_ty res] parametrizes type query with res  *)
+
+  let query_ty res =
+    let name = mknoloc query_lid
+    in Ast_helper_alpha.Typ.constr name [res]
+
+  (**************************************************************************)
+  (*          Part I. Translate cotypes                                     *)
+  (**************************************************************************)
+
+  (* Generates target-side code *)
+
+  open Ast_helper
+
+  let apply_to_dispatch e = Exp.apply (Exp.ident dispatch_lid) [(Nolabel,e)]
+
+  let getters td lds =
+    let open S in
+    (* Stream *)
+    let sname = String.uppercase_ascii td.ptype_name.txt in
+    let l = String.length sname in
+    let rname = String.sub sname 1 (pred l) in
+    let uname = {             (* 2 *)
+      td.ptype_name with txt = Longident.parse rname
+    } in
+    (* { dispatch = dispatch } *)
+    let corr = [(dispatch_lid, Pat.var dispatch_id)] in
+    let drpat =  Pat.record corr Closed in
+    (* !STREAM {dispatch = dispatch} *)
+    let upat = Pat.construct uname (Some drpat) in
+    let getter cld =
+      (* get variant_lid *)
+      let k_lid = {
+        cld.pcld_name with txt = Longident.parse cld.pcld_name.txt
+      } in
+      (* Head *)
+      let k = Exp.construct k_lid None in
+      (* dispatch Head *)
+      let body = apply_to_dispatch k in
+      (* fun (!STREAM {dispatch = dispatch}) -> dispatch Head *)
+      let full_body = Exp.fun_ Nolabel None upat body in
+      (* Head => head *)
+      let lname = cld.pcld_name.txt in
+      let b = Bytes.of_string lname in
+      Bytes.set b 0 (Char.lowercase_ascii lname.[0]);
+      let s = Bytes.to_string b in
+      let vpat = Pat.var (mknoloc s) in
+      (* let head = fun (!STREAM {dispatch}) -> dispatch Head *)
+      Vb.mk vpat full_body
+    in List.map getter lds
+
+  (* Generates source-side code *)
+
+  open Ast_helper_alpha
 
   (* [apply_to_dispatch e] = (dispatch) e *)
 
-  let apply_to_dispatch e2 =
-    let id = dispatch_lid () in
-    mk_exp (Pexp_apply (mk_exp (Pexp_ident id),[(Nolabel,e2)]))
-
   let ty_variant td =
     let open S in
-    (* Stream *)
+    (* STREAM *)
     let sname = String.uppercase_ascii td.ptype_name.txt in
     let l = String.length sname in
     let rname = String.sub sname 1 (pred l) in
@@ -123,76 +233,195 @@ module Trans = struct
     (* 'output query *)
     let query = query_ty out_var in
     (* ('output query,'a) -!stream -> 'output *)
-    let arrow_ty =
-      Typ.arrow ~loc:!loc Nolabel
-        (Typ.constr ~loc:!loc lid (query::params)) out_var
-    in
+    let arrow_ty = Typ.arrow Nolabel (Typ.constr lid (query :: params)) out_var in
     (* 'output . ('output query,'a) -!stream -> 'output *)
-    let poly_arrow = Typ.poly ~loc:!loc [fresh_out] arrow_ty in
+    let poly_arrow = Typ.poly [fresh_out] arrow_ty in
     (* { dispatch : 'output . ('output query,'a) -!stream -> 'output } *)
-    let field = Type.field ~loc:!loc (dispatch_id ()) poly_arrow in
+    let field = Type.field dispatch_id poly_arrow in
     let args = Pcstr_record [field] in
     (* (codata,'a) -!stream*)
-    let res = Typ.constr ~loc:!loc lid (codata :: params) in
+    let res = Typ.constr lid (codata :: params) in
     (* !Stream : {dispatch : ..} ->(codata,'a) -!stream) *)
-    Type.constructor uname ~loc:!loc ~args ~res
+    Type.constructor uname ~args ~res
 
   let ty_observer td lds =
     let open S in
     (* -!stream *)
-    let lid = {
-      txt = Longident.parse ("-" ^ td.ptype_name.txt);
-      loc = !loc;
-    } in
+    let lid = mknoloc (Longident.parse ("-" ^ td.ptype_name.txt)) in
     (* 'a *)
     let params = List.map fst td.ptype_params in
     (*  *)
     let constructors = List.map (fun cld ->
         let query = query_ty cld.pcld_type in
         let res = Typ.constr lid (query :: params) in
-        Type.constructor ~loc:!loc
-          ~attrs:cld.pcld_attributes ~res cld.pcld_name
+        Type.constructor ~attrs:cld.pcld_attributes ~res cld.pcld_name
       ) lds in
     let ty_constructor = ty_variant td in
     { td with
-      ptype_loc = !loc;
       ptype_params = (Typ.any (), Invariant) :: td.ptype_params;
       ptype_kind = Ptype_variant (ty_constructor :: constructors);
     }
 
-  let getters td lds =
-    (* Stream *)
-    let sname = String.uppercase_ascii td.S.ptype_name.txt in
-    let l = String.length sname in
-    let rname = String.sub sname 1 (pred l) in
-    let uname = S.{             (* 2 *)
-        td.ptype_name with txt = Longident.parse rname
-      } in
-    (* { dispatch = dispatch } *)
-    let corr = [(dispatch_lid (), dispattern ())] in
-    let drpat =  mk_pat @@ Ppat_record (corr,Closed) in
-    (* !STREAM {dispatch = dispatch} *)
-    let upat = mk_pat @@ Ppat_construct (uname, Some drpat) in
-    let getter cld =
-      (* get variant_lid *)
-      let k_lid = S.{
-          cld.pcld_name with txt = Longident.parse cld.pcld_name.txt
-        } in
-      (* Head *)
-      let k = mk_exp (Pexp_construct (k_lid,None)) in
-      (* dispatch Head *)
-      let body = apply_to_dispatch k in
-      (* fun (!STREAM {dispatch = dispatch}) -> dispatch Head *)
-      let full_body = mk_fun upat body in
-      (* Head => head *)
-      let lname = cld.S.pcld_name.txt in
-      let b = Bytes.of_string lname in
-      Bytes.set b 0 (Char.lowercase_ascii lname.[0]);
-      let s = Bytes.to_string b in
-      let vpat = mk_pat (Ppat_var (myloc s)) in
-      (* let head = fun (!STREAM {dispatch = dispatch}) -> dispatch Head *)
-      mk_vb vpat full_body
-    in List.map getter lds
+  (**************************************************************************)
+  (*          Part II. Translate cofunctions                                *)
+  (**************************************************************************)
+
+  (* Borrowed from Parser.mly *)
+
+  let check_variable vl _loc v =
+    if List.mem v vl then failwith "Variable_in_scope"
+  (* raise Syntaxerr.(Error(Variable_in_scope(loc,v))) *)
+
+  let varify_constructors var_names t =
+    let open S in
+    let rec loop t =
+      let desc = match t.ptyp_desc with
+        | Ptyp_any -> Ptyp_any
+        | Ptyp_var x ->
+            check_variable var_names t.ptyp_loc x;
+            Ptyp_var x
+        | Ptyp_arrow (label,core_type,core_type') ->
+            Ptyp_arrow(label, loop core_type, loop core_type')
+        | Ptyp_tuple lst -> Ptyp_tuple (List.map loop lst)
+        | Ptyp_constr( { txt = Longident.Lident s }, [])
+          when List.mem s var_names ->
+            Ptyp_var s
+        | Ptyp_constr(longident, lst) ->
+            Ptyp_constr(longident, List.map loop lst)
+        | Ptyp_object (lst, o) ->
+            Ptyp_object (List.map (fun (s, attrs, t) -> (s, attrs, loop t)) lst, o)
+        | Ptyp_class (longident, lst) ->
+            Ptyp_class (longident, List.map loop lst)
+        | Ptyp_alias(core_type, string) ->
+            check_variable var_names t.ptyp_loc string;
+            Ptyp_alias(loop core_type, string)
+        | Ptyp_variant(row_field_list, flag, lbl_lst_option) ->
+            Ptyp_variant(List.map loop_row_field row_field_list,
+                         flag, lbl_lst_option)
+        | Ptyp_poly(string_lst, core_type) ->
+            List.iter (check_variable var_names t.ptyp_loc) string_lst;
+            Ptyp_poly(string_lst, loop core_type)
+        | Ptyp_package(longident,lst) ->
+            Ptyp_package(longident,List.map (fun (n,typ) -> (n,loop typ) ) lst)
+        | Ptyp_extension (s, arg) ->
+            Ptyp_extension (s, arg)
+      in {t with ptyp_desc = desc}
+
+    and loop_row_field = function
+      | Rtag(label,attrs,flag,lst) ->
+          Rtag(label,attrs,flag,List.map loop lst)
+      | Rinherit t ->
+          Rinherit (loop t)
+
+    in loop t
+
+  let mk_newtypes newtypes exp =
+    List.fold_right (fun newtype exp ->
+        Exp.mk S.(Pexp_newtype (newtype, exp))
+      ) newtypes exp
+
+  (* When one writes [let f : type a. ty = M], OCaml translates this into
+     [let f : 'a. ty[a'/a] = fun (type a) -> (M : ty)] during the parsing.
+     This is done thanks to this [wrap_type_annotation] function.
+  *)
+
+  let wrap_type_annotation newtypes core_type body =
+    let exp = Exp.mk S.(Pexp_constraint(body,core_type)) in
+    let exp = mk_newtypes newtypes exp in
+    (exp, Typ.poly newtypes (varify_constructors newtypes core_type))
+
+  exception Malformed_cofunction
+
+  (* dispatch_ty (int !stream) == type o. (o query, int) !stream  *)
+
+  let dispatch_ty cotype = match cotype.S.ptyp_desc with
+    | S.Ptyp_constr (lid, core_tys) ->
+        (* mark type *)
+        let lid = {lid with txt = lid_map_last (fun s -> "-" ^ s) lid.txt} in
+        (* output *)
+        let poly = fresh_var () in
+        (* output query *)
+        let poly_lid = mknoloc (Longident.Lident poly) in
+        let poly_cons = Typ.constr poly_lid [] in
+        let query = query_ty poly_cons in
+        (* (output query,'a) -!ty *)
+        let ty = Typ.constr lid (query :: core_tys) in
+        (* (output query,'a) -!ty -> 'output *)
+        let arrow_ty = Typ.arrow Nolabel ty poly_cons in
+        ([poly],arrow_ty)
+
+    | _ -> raise Malformed_cofunction
+
+  let construct_from_string s =
+    let lid = {s with txt = Longident.parse s.txt} in
+    Pat.construct ~loc:s.loc lid None
+
+  let lid_from_str_loc s = {s with txt = Longident.parse s.txt}
+
+  (* entrance fid ty body == let rec fid : ty = body in fid *)
+
+  let entrance id ty body =
+    let tag = Recursive in
+    let vbs = [Vb.mk (Pat.var id) (Exp.constraint_ body ty)] in
+    let res = Exp.ident (lid_from_str_loc id) in
+    S.Pexp_let (tag,vbs,res)
+
+  (* dispatch_expr cases ty r == let dispatch : ty = function cases in r *)
+
+  (* mk_block id cases ty == let id : ty = fn cases in id *)
+
+  let mk_block id cases ty =
+    let id_pat = Pat.var (mknoloc id) in
+    let body = Exp.function_ cases in
+    let res = match ty.S.ptyp_desc with
+      | S.Ptyp_constr (lid,_) ->
+          let rname s =
+            let l = String.length s in
+            String.uppercase_ascii (String.sub s 1 (pred l))
+          in
+          let uname = {
+            lid with txt = lid_map_last rname lid.txt
+          } in
+          let corr = [(dispatch_lid, Exp.ident dispatch_lid)] in
+          let drpat =  Exp.record corr None in
+          Exp.construct uname (Some drpat)
+      | _ -> assert false       (* should be checked before *)
+    in
+    let (lids,new_ty) = dispatch_ty ty in
+    let (exp,poly) = wrap_type_annotation lids new_ty body in
+    let pat = Pat.constraint_ id_pat poly in
+    Exp.let_ Nonrecursive [Vb.mk pat exp] res
+
+  let mk_dispatch_expr cases ty = mk_block "dispatch" cases ty
+
+  let rec implode ty qts =
+    List.fold_right (fun c (cases,to_deploy) ->
+        match c.Linear.children with
+        | Linear.Expr e ->
+            (Exp.case (construct_from_string c.Linear.id) e :: cases, to_deploy)
+        | Linear.QTrees qts ->
+            let anchor = fresh_fid () in
+            let anchor_lid = mknoloc (Longident.parse anchor) in
+            let anchor_ident = Exp.ident anchor_lid in
+            let (new_cases,xs) = implode ty qts in
+            let case = Exp.case (construct_from_string c.Linear.id) anchor_ident in
+            (case :: cases, xs @ (anchor,ty,new_cases) :: to_deploy)
+      ) qts ([],[])
+
+  let collapse_let_in xs e =
+    List.fold_right (fun (id,ty,cases) acc ->
+        let id_pat = Pat.var (mknoloc id) in
+        let body = mk_dispatch_expr cases ty in
+        Exp.let_ Nonrecursive [Vb.mk id_pat body] acc
+      ) xs e
+
+  let full id ty cocases =
+    let qts = Linear.group (Linear.linearize_cocases cocases) in
+    (* print_endline (Linear.show qts); (* uncomment to debug *)  *)
+    let (cases,xs) = implode ty qts in
+    let dispatch_expr = mk_dispatch_expr cases ty in
+    let full_body = collapse_let_in xs dispatch_expr in
+    entrance id ty full_body
 
 end
 
@@ -240,14 +469,14 @@ and core_type_desc = function
   | S.Ptyp_constr (lid,core_tys) ->
       let last_lid = Longident.last lid.txt in
       if last_lid.[0] = '!' then
-        (* it is a cotype and we have to add a parameter 'codata' *)
-        Ptyp_constr (lid, List.map core_type (codata :: core_tys))
+        (* if it is a cotype and we have to add a parameter 'codata' *)
+        Ptyp_constr (lid, List.map core_type (Trans.codata :: core_tys))
       else if last_lid.[0] = '-' then
-        (* it is a cotype but we already added a 'codata' parameter
-           then we delete the mark '-' *)
+        (* if it is a cotype but we already added a 'codata' parameter
+           so we just delete the mark '-' *)
         let new_lid = {lid with txt = adapt lid.txt} in
         Ptyp_constr (new_lid, List.map core_type core_tys)
-      else (* it is not a cotype *)
+      else (* else it is not a cotype *)
         Ptyp_constr (lid, List.map core_type core_tys)
   | S.Ptyp_object (fields, flag) ->
       let new_fields = List.map (fun (s, atts, core_ty) ->
@@ -409,8 +638,8 @@ and expression_desc = function
       Pexp_extension (extension ext)
   | S.Pexp_unreachable ->
       Pexp_unreachable
-  | S.Pexp_comatch (_id,_ty,_bs) ->
-      failwith "MNTSA::cofunction"
+  | S.Pexp_comatch (id,ty,cs) ->
+      expression_desc (Trans.full id ty cs)
 
 and case x = {
   pc_lhs = pattern x.S.pc_lhs;
@@ -786,12 +1015,11 @@ and structure_item str = match structure_item_desc str.S.pstr_desc with
   | (pstr_desc,None) ->
       [{pstr_desc;pstr_loc = str.S.pstr_loc}]
   | (pstr_desc,Some gen) ->
-      loc := str.S.pstr_loc;
       let str_items =
         List.map (fun pstr_desc ->
-            { pstr_desc; pstr_loc = !loc }
+            { pstr_desc; pstr_loc = str.S.pstr_loc }
           ) gen
-      in {pstr_desc; pstr_loc = !loc} :: str_items
+      in {pstr_desc; pstr_loc = str.S.pstr_loc} :: str_items
 
 and structure_item_desc = function
   | S.Pstr_eval (e,atts) ->
@@ -838,7 +1066,6 @@ and type_declarations0 tds =
 
 and type_declaration0 td = match td.S.ptype_kind with
   | S.Ptype_cotype lds ->
-      loc := td.S.ptype_loc;
       let (tys,exp) = Trans.(ty_observer td lds, getters td lds) in
       (type_declaration tys, Some exp)
   | _ -> (type_declaration td, None)
