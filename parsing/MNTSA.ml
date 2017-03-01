@@ -35,17 +35,17 @@ let ( >>= ) m f = List.fold_right (fun x acc -> f x @ acc) m []
 module Linear = struct
 
   type lcopattern =
-    | QApp of S.pattern
-    | QDes of string loc
+    | LApp of S.pattern
+    | LDes of string loc
 
   let linearize q =
     let rec loop acc q = match q.S.pcopat_desc with
       | S.Pcopat_hole _ ->
           acc
       | S.Pcopat_application (q,p) ->
-          loop (QApp p :: acc) q
+          loop (LApp p :: acc) q
       | S.Pcopat_destructor (q,d) ->
-          loop (QDes d :: acc) q
+          loop (LDes d :: acc) q
     in loop [] q
 
   type linear_cocase = {
@@ -79,12 +79,10 @@ module Linear = struct
 
   let index acc c = match c.lhs with
     | [] -> []
-    | QDes id :: qs -> insert id {c with lhs = qs} acc
-    | QApp _ :: _ -> failwith "QApp::todo"
+    | LDes id :: qs -> insert id {c with lhs = qs} acc
+    | LApp _ :: _ -> failwith "QApp::todo"
 
   let qtree id children = {id; children}
-
-  let ( >>= ) m f = List.fold_right (fun x acc -> f x @ acc) m []
 
   let is_final q = q.lhs = []
 
@@ -135,6 +133,12 @@ module Trans = struct
     fun () ->
       incr i;
       "__fid__" ^ string_of_int !i
+
+  let fresh_rhs_id =
+    let i = ref 0 in
+    fun () ->
+      incr i;
+      "__rhs__" ^ string_of_int !i
 
   let lid_map_last f = Longident.(function
       | Lident s -> Lident (f s)
@@ -289,7 +293,7 @@ module Trans = struct
         | Ptyp_constr(longident, lst) ->
             Ptyp_constr(longident, List.map loop lst)
         | Ptyp_object (lst, o) ->
-            Ptyp_object (List.map (fun (s, attrs, t) -> (s, attrs, loop t)) lst, o)
+            Ptyp_object (List.map (fun (s,attrs,t) -> (s,attrs,loop t)) lst,o)
         | Ptyp_class (longident, lst) ->
             Ptyp_class (longident, List.map loop lst)
         | Ptyp_alias(core_type, string) ->
@@ -370,8 +374,21 @@ module Trans = struct
 
   (* mk_block id cases ty == let id : ty = fn cases in id *)
 
-  let mk_block id cases ty =
+  let mk_lazy expr = Exp.lazy_ expr
+
+  let lazy_force_lid = mknoloc (Longident.parse "Lazy.force")
+
+  let mk_lazy_force id =
+    let lid = mknoloc (Longident.parse id) in
+    Exp.apply (Exp.ident lazy_force_lid) [(Nolabel,Exp.ident lid)]
+
+  let mk_block id lazy_vbs cases ty =
     let id_pat = Pat.var (mknoloc id) in
+    let let_lazy e =
+      List.fold_right (fun vb acc ->
+          Exp.let_ Nonrecursive [vb] acc
+        ) lazy_vbs e
+    in
     let body = Exp.function_ cases in
     let res = match ty.S.ptyp_desc with
       | S.Ptyp_constr (lid,_) ->
@@ -390,28 +407,48 @@ module Trans = struct
     let (lids,new_ty) = dispatch_ty ty in
     let (exp,poly) = wrap_type_annotation lids new_ty body in
     let pat = Pat.constraint_ id_pat poly in
+    let_lazy @@
     Exp.let_ Nonrecursive [Vb.mk pat exp] res
 
-  let mk_dispatch_expr cases ty = mk_block "dispatch" cases ty
+  let mk_dispatch_expr to_lazy cases ty =
+    mk_block "dispatch" to_lazy cases ty
+
+  (* take a [(kid,expr)] and returns [(id,expr)] * [(kid,fresh_id)] as vbs *)
+  let replace_for_lazy xs =
+    let rec loop (acc1, acc2) xs = match xs with
+      | [] -> (acc1, acc2)
+      | vb::xs ->
+          let id = fresh_rhs_id () in
+          let a1 = Vb.mk (Pat.var (mknoloc id)) (mk_lazy vb.S.pc_rhs) in
+          let a2 = Exp.case vb.S.pc_lhs (mk_lazy_force id) in
+          loop (a1::acc1, a2::acc2) xs
+    in loop ([],[]) (List.rev xs)
 
   let rec implode ty qts =
     List.fold_right (fun c (cases,to_deploy) ->
         match c.Linear.children with
         | Linear.Expr e ->
-            (Exp.case (construct_from_string c.Linear.id) e :: cases, to_deploy)
+            (* final *)
+            let case = Exp.case (construct_from_string c.Linear.id) e in
+            (* let case = (construct_from_string c.Linear.id, e) in *)
+            (case :: cases, to_deploy)
         | Linear.QTrees qts ->
+            (* still to deploy *)
             let anchor = fresh_fid () in
             let anchor_lid = mknoloc (Longident.parse anchor) in
             let anchor_ident = Exp.ident anchor_lid in
-            let (new_cases,xs) = implode ty qts in
-            let case = Exp.case (construct_from_string c.Linear.id) anchor_ident in
-            (case :: cases, xs @ (anchor,ty,new_cases) :: to_deploy)
+            let (tmp_cases,xs) = implode ty qts in
+            let (lazy_vbs, new_cases) = replace_for_lazy tmp_cases in
+            let case =
+              Exp.case (construct_from_string c.Linear.id) anchor_ident
+            in
+            (case :: cases, xs @ (anchor,ty,lazy_vbs,new_cases) :: to_deploy)
       ) qts ([],[])
 
   let collapse_let_in xs e =
-    List.fold_right (fun (id,ty,cases) acc ->
-        let id_pat = Pat.var (mknoloc id) in
-        let body = mk_dispatch_expr cases ty in
+    List.fold_right (fun (anchor,ty,lazy_vbs,cases) acc ->
+        let id_pat = Pat.var (mknoloc anchor) in
+        let body = mk_dispatch_expr lazy_vbs cases ty in
         Exp.let_ Nonrecursive [Vb.mk id_pat body] acc
       ) xs e
 
@@ -419,7 +456,8 @@ module Trans = struct
     let qts = Linear.group (Linear.linearize_cocases cocases) in
     (* print_endline (Linear.show qts); (* uncomment to debug *)  *)
     let (cases,xs) = implode ty qts in
-    let dispatch_expr = mk_dispatch_expr cases ty in
+    let (lazy_vbs,new_cases) = replace_for_lazy cases in
+    let dispatch_expr = mk_dispatch_expr lazy_vbs new_cases ty in
     let full_body = collapse_let_in xs dispatch_expr in
     entrance id ty full_body
 
