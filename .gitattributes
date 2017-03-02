@@ -130,4 +130,4 @@ testsuite/tests/parsing/*.ml text eol=lf
 testsuite/tests/docstrings/empty.ml text eol=lf
 
 # Remove paper folder
-paper/
+paper/ export-ignore
