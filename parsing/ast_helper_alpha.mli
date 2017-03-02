@@ -109,7 +109,7 @@ module CoPat :
     val mk: ?loc:Location.t -> copattern_desc -> copattern
     val hole: ?loc:Location.t -> str -> copattern
     val application: ?loc:Location.t -> copattern -> pattern -> copattern
-    val destructor: ?loc:Location.t -> copattern -> str -> copattern
+    val destructor: ?loc:Location.t -> copattern -> str -> core_type option -> copattern
   end
 
 (** Expressions *)
@@ -200,7 +200,7 @@ module Type:
       constructor_declaration
     val field: ?loc:loc -> ?attrs:attrs -> ?info:info ->
       ?mut:mutable_flag -> str -> core_type -> label_declaration
-    val cofield: ?loc:loc -> ?attrs:attrs -> ?info:info ->
+    val cofield: ?loc:loc -> ?attrs:attrs -> ?info:info -> ?index:core_type ->
       str -> core_type -> colabel_declaration
   end
 

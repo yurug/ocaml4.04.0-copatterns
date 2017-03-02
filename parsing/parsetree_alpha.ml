@@ -85,6 +85,9 @@ module S = struct
        ~l:T1 -> T2    Labelled
        ?l:T1 -> T2    Otional
     *)
+    | Ptyp_coarrow of core_type * core_type
+    (* T1 <- T2
+    *)
     | Ptyp_tuple of core_type list
     (* T1 * ... * Tn
 
@@ -237,7 +240,7 @@ module S = struct
     (* f *)
     | Pcopat_application of copattern * pattern
     (* q p *)
-    | Pcopat_destructor  of copattern * string loc
+    | Pcopat_destructor  of copattern * string loc * core_type option
     (* q.d *)
 
 
@@ -264,8 +267,8 @@ module S = struct
     | Pexp_function of case list
     (* function P1 -> E1 | ... | Pn -> En *)
 
-    | Pexp_comatch of string loc * core_type * cocase list
-    (* comatch x : T with Q1 -> E1 | ... | Qn -> En *)
+    | Pexp_comatch of bool string loc * core_type * cocase list
+    (* [lazy] comatch x : T with Q1 -> E1 | ... | Qn -> En *)
 
     | Pexp_fun of arg_label * expression option * pattern * expression
     (* fun P -> E1                          (Simple, None)
@@ -454,6 +457,7 @@ module S = struct
       pcld_type: core_type;
       pcld_loc: Location.t;
       pcld_attributes: attributes; (* l [@id1] [@id2] : T *)
+      pcld_index: core_type option;
     }
 
   (*  { ...; l: T; ... }            (mutable=Immutable)

@@ -96,7 +96,7 @@ module CoPat = struct
   let mk ?(loc = !default_loc) d = {pcopat_desc = d; pcopat_loc = loc}
   let hole ?loc name = mk ?loc (Pcopat_hole name)
   let application ?loc q p = mk ?loc (Pcopat_application (q,p))
-  let destructor ?loc q d = mk ?loc (Pcopat_destructor (q,d))
+  let destructor ?loc q d ty = mk ?loc (Pcopat_destructor (q,d,ty))
 end
 
 
@@ -456,13 +456,14 @@ module Type = struct
      pld_attributes = add_info_attrs info attrs;
     }
 
-  let cofield ?(loc = !default_loc) ?(attrs = []) ?(info = empty_info)
+  let cofield ?(loc = !default_loc) ?(attrs = []) ?(info = empty_info) ?index
       name typ =
     {
       pcld_name = name;
       pcld_type = typ;
       pcld_loc = loc;
       pcld_attributes = add_info_attrs info attrs;
+      pcld_index = index
     }
 
 end

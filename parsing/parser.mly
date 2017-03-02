@@ -234,6 +234,8 @@ let varify_constructors var_names t =
           Ptyp_var x
       | Ptyp_arrow (label,core_type,core_type') ->
           Ptyp_arrow(label, loop core_type, loop core_type')
+      | Ptyp_coarrow (core_type, core_type') ->
+          Ptyp_coarrow(loop core_type, loop core_type')
       | Ptyp_tuple lst -> Ptyp_tuple (List.map loop lst)
       | Ptyp_constr( { txt = Lident s }, []) when List.mem s var_names ->
           Ptyp_var s
@@ -1370,8 +1372,8 @@ expr:
       { mkexp_attrs (Pexp_open($3, mkrhs $5 5, $7)) $4 }
   | FUNCTION ext_attributes opt_bar match_cases
       { mkexp_attrs (Pexp_function(List.rev $4)) $2 }
-  | COMATCH val_ident COLON core_type WITH opt_bar comatch_cases
-      { mkexp(Pexp_comatch (mkrhs $2 2,$4,List.rev $7))}
+  | lazy_modifier COMATCH val_ident COLON core_type WITH opt_bar comatch_cases
+      { mkexp(Pexp_comatch ($1,mkrhs $3 2,$5,List.rev $8))}
   | FUN ext_attributes labeled_simple_pattern fun_def
       { let (l,o,p) = $3 in
         mkexp_attrs (Pexp_fun(l, o, p, $4)) $2 }
@@ -1742,15 +1744,19 @@ opt_type_constraint:
 ;
 
 /* Copatterns and Patterns */
+lazy_modifier:
+  LAZY { true }
+| /* empty */ { false }
+;
 
 simple_copattern:
   | LIDENT                         { mkcopat(Pcopat_hole (mkrhs $1 1)) }
-  | simple_copattern HASH UIDENT   { mkcopat(Pcopat_destructor ($1,mkrhs $3 3)) }
-/*  | LPAREN copattern RPAREN      { $2 }
-
+  | simple_copattern HASH UIDENT   { mkcopat(Pcopat_destructor ($1,mkrhs $3 3, None)) }
+  | simple_copattern HASH LPAREN UIDENT COLON core_type RPAREN { mkcopat(Pcopat_destructor ($1,mkrhs $4 3, Some $6)) }
+/*
 copattern:
   | LIDENT                       { mkcopat(Pcopat_hole (mkrhs $1 1)) }
-  | simple_copattern HASH UIDENT { mkcopat(Pcopat_destructor ($1,mkrhs $3 3)) }
+  | simple_copattern HASH UIDENT { mkcopat(Pcopat_destructor ($1,mkrhs $3 3, None)) }
   | copattern simple_pattern     { mkcopat(Pcopat_application ($1,mkrhs $2 2)) }
 */
 pattern:
@@ -2123,14 +2129,18 @@ colabel_declarations:
   | colabel_declaration_semi colabel_declarations   { $1 :: $2 }
 ;
 colabel_declaration:
-    colabel COLON poly_type_no_attr attributes
+  colabel COLON poly_type_no_attr attributes
+    {
+      Type.cofield (mkrhs $1 1) $3 ~attrs:$4 ~loc:(symbol_rloc()) ~info:(symbol_info ())
+    }
+| colabel COLON poly_type_no_attr attributes LESSMINUS simple_core_type attributes
       {
-       Type.cofield (mkrhs $1 1) $3 ~attrs:$4
+       Type.cofield (mkrhs $1 1) $3 ~attrs:($4 @ $7) ~index:$6
          ~loc:(symbol_rloc()) ~info:(symbol_info ())
       }
 ;
 colabel_declaration_semi:
-    colabel COLON poly_type_no_attr attributes SEMI attributes
+ colabel COLON poly_type_no_attr attributes SEMI attributes
       {
        let info =
          match rhs_info 4 with
@@ -2140,6 +2150,17 @@ colabel_declaration_semi:
        Type.cofield (mkrhs $1 1) $3 ~attrs:($4 @ $6)
          ~loc:(symbol_rloc()) ~info
       }
+| colabel COLON poly_type_no_attr attributes LESSMINUS simple_core_type SEMI attributes
+      {
+       let info =
+         match rhs_info 4 with
+         | Some _ as info_before_semi -> info_before_semi
+         | None -> symbol_info ()
+       in
+       Type.cofield (mkrhs $1 1) $3 ~attrs:($4 @ $8) ~index:$6
+         ~loc:(symbol_rloc()) ~info
+      }
+
 ;
 /* Type Extensions */
 
@@ -2284,6 +2305,9 @@ core_type2:
   | core_type2 MINUSGREATER core_type2
       { let param = extra_rhs_core_type $1 ~pos:1 in
         mktyp(Ptyp_arrow(Nolabel, param, $3)) }
+  | simple_core_type2 LESSMINUS core_type2
+      { let param = extra_rhs_core_type $1 ~pos:1 in
+        mktyp(Ptyp_coarrow(param, $3)) }
 ;
 
 simple_core_type:

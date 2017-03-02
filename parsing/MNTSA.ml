@@ -2,7 +2,7 @@
 (*                                                                        *)
 (*                    Make Negative Types Smile Again                     *)
 (*                                                                        *)
-(*                 Yann Régis-Gianas, Paul Laforgue                       *)
+(*                    Paul Laforgue, Yann Régis-Gianas                    *)
 (*                                                                        *)
 (**************************************************************************)
 
@@ -21,6 +21,9 @@ let map_snd g (a,b) = (a, g b)
 
 let ( >>= ) m f = List.fold_right (fun x acc -> f x @ acc) m []
 
+let string_tail s =
+  String.(if length s = 0 then "" else sub s 1 (length s - 1))
+
 (** {1 Transformation} *)
 
 
@@ -36,7 +39,21 @@ module Linear = struct
 
   type lcopattern =
     | LApp of S.pattern
-    | LDes of string loc
+    | LDes of string loc * S.core_type option
+
+  let location_of_lcopattern = function
+    | LApp p -> p.S.ppat_loc
+    | LDes (d, _) -> d.loc
+
+  let equal_lcopattern l1 l2 =
+    match l1, l2 with
+    | LApp _, LApp _ -> (* FIXME *) false
+    | LDes (d1, _), LDes (d2, _) -> d1.txt = d2.txt
+    | _, _ -> false
+
+  let string_of_lcopattern = function
+    | LApp _ -> "p"
+    | LDes (k, _) -> "." ^ k.txt
 
   let linearize q =
     let rec loop acc q = match q.S.pcopat_desc with
@@ -44,14 +61,17 @@ module Linear = struct
           acc
       | S.Pcopat_application (q,p) ->
           loop (LApp p :: acc) q
-      | S.Pcopat_destructor (q,d) ->
-          loop (LDes d :: acc) q
+      | S.Pcopat_destructor (q,d,o) ->
+          loop (LDes (d, o) :: acc) q
     in loop [] q
 
   type linear_cocase = {
     lhs : lcopattern list;
     rhs : S.expression;
   }
+
+  let _string_of_cocase l =
+    String.concat " " (List.map string_of_lcopattern l)
 
   let linear_cocase {S.pcc_lhs;pcc_rhs} = {
     lhs = linearize pcc_lhs;
@@ -70,6 +90,7 @@ module Linear = struct
 
   type qtree = {
     id : string loc;            (* should a lcopattern in the future *)
+    ntype : S.core_type option;
     children : leaf;
   }
 
@@ -79,22 +100,66 @@ module Linear = struct
 
   let index acc c = match c.lhs with
     | [] -> []
-    | LDes id :: qs -> insert id {c with lhs = qs} acc
+    | LDes (id, typ) :: qs -> insert id (typ, {c with lhs = qs}) acc
     | LApp _ :: _ -> failwith "QApp::todo"
 
-  let qtree id children = {id; children}
+  let qtree id ntype children = {id; ntype; children}
 
   let is_final q = q.lhs = []
 
+  let split_branches qs =
+    let rec aux (typ, cs) = function
+      | [] ->
+         typ, List.rev cs
+      | (ntyp, c) :: qs ->
+         let typ = match ntyp with
+         | None -> typ
+         | Some typ' -> Some typ' (* FIXME: Add a check if typ <> None *)
+         in
+         aux (typ, c :: cs) qs
+    in
+    aux (None, []) qs
+
   let rec group (xs : linear_cocase list) =
     List.fold_left index [] xs >>= fun (id,qs) ->
+    let typ, qs = split_branches qs in
     let (qs1,qs2) = List.partition is_final qs in
-    let res1 = List.map (fun q -> qtree id (Expr q.rhs)) qs1 in
+    let res1 = List.map (fun q -> qtree id typ (Expr q.rhs)) qs1 in
     if qs2 = [] then res1
-    else res1 @ [qtree id (QTrees (group qs2))]
+    else res1 @ [qtree id typ (QTrees (group qs2))]
+
+  let rec is_prefix lps1 lps2 = match lps1, lps2 with
+    | ([], _) -> true
+    | (x :: xs, y :: ys) -> equal_lcopattern x y && is_prefix xs ys
+    | (_, []) -> false
+
+  let filter_redundant cocases =
+    let hide lps1 lps2 =
+      is_prefix lps1 lps2 || is_prefix lps2 lps1
+    in
+    let is_redundant above_branches branch =
+      let r =
+        not (List.exists (fun (not_redundant, other_branch) ->
+                 not_redundant && hide other_branch.lhs branch.lhs
+               ) above_branches)
+      in
+      if not r then (
+        let loc = location_of_lcopattern (List.hd branch.lhs) in
+        Location.prerr_warning loc Warnings.Unreachable_case
+      );
+      (r, branch)
+    in
+    let rec aux seen = function
+      | [] ->
+         List.(rev_map snd (filter fst seen))
+      | branch :: cocases ->
+         aux (is_redundant seen branch :: seen) cocases
+    in
+    aux [] cocases
 
   let linearize_cocases cocases =
-    List.map linear_cocase cocases
+    let lcocases = List.map linear_cocase cocases in
+    filter_redundant lcocases
 
   (* DEBUG *)
 
@@ -145,6 +210,7 @@ module Trans = struct
       | Ldot (lid,s) -> Ldot (lid,f s)
       | Lapply _ -> assert false
     )
+
   let dispatch = "dispatch"
 
   let dispatch_id = mknoloc "dispatch"
@@ -159,11 +225,15 @@ module Trans = struct
 
   let query_lid = Longident.parse "Pervasives.query"
 
-  (* [query_ty res] parametrizes type query with res  *)
-
+  (** [query_ty res] parametrizes type query with res  *)
   let query_ty res =
-    let name = mknoloc query_lid
-    in Ast_helper_alpha.Typ.constr name [res]
+    let name = mknoloc query_lid in
+    Ast_helper_alpha.Typ.constr name [res]
+
+  let tquery_ty res =
+    let name = mknoloc query_lid in
+    Ast_helper.Typ.constr name [res]
+
 
   (**************************************************************************)
   (*          Part I. Translate cotypes                                     *)
@@ -225,12 +295,12 @@ module Trans = struct
     let uname = {
       td.ptype_name with txt = rname
     } in
-    (* -!stream *)
+    (* !stream -> stream *)
     let lid = {
-      td.ptype_name with txt = Longident.parse ("-" ^ td.ptype_name.txt)
+      td.ptype_name with txt = Longident.parse (string_tail td.ptype_name.txt)
     } in
     (* 'a *)
-    let params = List.map fst td.ptype_params in
+    let params = List.map (fun _ -> Typ.var (fresh_var ())) td.ptype_params in
     (* 'output *)
     let fresh_out = fresh_var () in
     let out_var = Typ.var fresh_out in
@@ -248,20 +318,35 @@ module Trans = struct
     (* !Stream : {dispatch : ..} ->(codata,'a) -!stream) *)
     Type.constructor uname ~args ~res
 
+  (** [ty_observation_request 〚o〛 ε〚τs〛] is the translation for
+      o ← ε(τs), that is ε(〚o〛 query, 〚τs〛). We assume that the
+      input types are already translated. *)
+  let ty_observation_request o e tys =
+    let lid = mknoloc (lid_map_last (( ^ ) "-") e) in
+    Ptyp_constr (lid, tquery_ty o :: tys)
+
   let ty_observer td lds =
     let open S in
-    (* -!stream *)
-    let lid = mknoloc (Longident.parse ("-" ^ td.ptype_name.txt)) in
+    (* !stream -> stream *)
+    let tname = string_tail td.ptype_name.txt in
+    let lid = mknoloc (Longident.parse tname) in
     (* 'a *)
     let params = List.map fst td.ptype_params in
     (*  *)
     let constructors = List.map (fun cld ->
         let query = query_ty cld.pcld_type in
+        let params =
+          match cld.pcld_index with
+          | None -> params
+          | Some { ptyp_desc = Ptyp_constr (_, params) } -> params
+          | _ -> assert false (* TODO *)
+        in
         let res = Typ.constr lid (query :: params) in
         Type.constructor ~attrs:cld.pcld_attributes ~res cld.pcld_name
       ) lds in
     let ty_constructor = ty_variant td in
     { td with
+      ptype_name = Location.mkloc tname td.ptype_loc;
       ptype_params = (Typ.any (), Invariant) :: td.ptype_params;
       ptype_kind = Ptype_variant (ty_constructor :: constructors);
     }
@@ -282,40 +367,42 @@ module Trans = struct
       let desc = match t.ptyp_desc with
         | Ptyp_any -> Ptyp_any
         | Ptyp_var x ->
-            check_variable var_names t.ptyp_loc x;
-            Ptyp_var x
+           check_variable var_names t.ptyp_loc x;
+           Ptyp_var x
         | Ptyp_arrow (label,core_type,core_type') ->
-            Ptyp_arrow(label, loop core_type, loop core_type')
+           Ptyp_arrow(label, loop core_type, loop core_type')
+        | Ptyp_coarrow (core_type, core_type') ->
+           Ptyp_coarrow (loop core_type, loop core_type')
         | Ptyp_tuple lst -> Ptyp_tuple (List.map loop lst)
         | Ptyp_constr( { txt = Longident.Lident s }, [])
-          when List.mem s var_names ->
-            Ptyp_var s
+             when List.mem s var_names ->
+           Ptyp_var s
         | Ptyp_constr(longident, lst) ->
-            Ptyp_constr(longident, List.map loop lst)
+           Ptyp_constr(longident, List.map loop lst)
         | Ptyp_object (lst, o) ->
-            Ptyp_object (List.map (fun (s,attrs,t) -> (s,attrs,loop t)) lst,o)
+           Ptyp_object (List.map (fun (s,attrs,t) -> (s,attrs,loop t)) lst,o)
         | Ptyp_class (longident, lst) ->
-            Ptyp_class (longident, List.map loop lst)
+           Ptyp_class (longident, List.map loop lst)
         | Ptyp_alias(core_type, string) ->
-            check_variable var_names t.ptyp_loc string;
-            Ptyp_alias(loop core_type, string)
+           check_variable var_names t.ptyp_loc string;
+           Ptyp_alias(loop core_type, string)
         | Ptyp_variant(row_field_list, flag, lbl_lst_option) ->
-            Ptyp_variant(List.map loop_row_field row_field_list,
-                         flag, lbl_lst_option)
+           Ptyp_variant(List.map loop_row_field row_field_list,
+                        flag, lbl_lst_option)
         | Ptyp_poly(string_lst, core_type) ->
-            List.iter (check_variable var_names t.ptyp_loc) string_lst;
-            Ptyp_poly(string_lst, loop core_type)
+           List.iter (check_variable var_names t.ptyp_loc) string_lst;
+           Ptyp_poly(string_lst, loop core_type)
         | Ptyp_package(longident,lst) ->
-            Ptyp_package(longident,List.map (fun (n,typ) -> (n,loop typ) ) lst)
+           Ptyp_package(longident,List.map (fun (n,typ) -> (n,loop typ) ) lst)
         | Ptyp_extension (s, arg) ->
-            Ptyp_extension (s, arg)
+           Ptyp_extension (s, arg)
       in {t with ptyp_desc = desc}
 
     and loop_row_field = function
       | Rtag(label,attrs,flag,lst) ->
-          Rtag(label,attrs,flag,List.map loop lst)
+         Rtag(label,attrs,flag,List.map loop lst)
       | Rinherit t ->
-          Rinherit (loop t)
+         Rinherit (loop t)
 
     in loop t
 
@@ -341,7 +428,7 @@ module Trans = struct
   let dispatch_ty cotype = match cotype.S.ptyp_desc with
     | S.Ptyp_constr (lid, core_tys) ->
         (* mark type *)
-        let lid = {lid with txt = lid_map_last (fun s -> "-" ^ s) lid.txt} in
+        let lid = {lid with txt = lid_map_last string_tail lid.txt} in
         (* output *)
         let poly = fresh_var () in
         (* output query *)
@@ -424,7 +511,7 @@ module Trans = struct
           loop (a1::acc1, a2::acc2) xs
     in loop ([],[]) (List.rev xs)
 
-  let rec implode ty qts =
+  let rec implode lazycomatch ty qts =
     List.fold_right (fun c (cases,to_deploy) ->
         match c.Linear.children with
         | Linear.Expr e ->
@@ -437,8 +524,11 @@ module Trans = struct
             let anchor = fresh_fid () in
             let anchor_lid = mknoloc (Longident.parse anchor) in
             let anchor_ident = Exp.ident anchor_lid in
-            let (tmp_cases,xs) = implode ty qts in
-            let (lazy_vbs, new_cases) = replace_for_lazy tmp_cases in
+            let ty = match c.Linear.ntype with None -> ty (* FIXME! *) | Some ty -> ty in
+            let (tmp_cases,xs) = implode lazycomatch ty qts in
+            let (lazy_vbs, new_cases) =
+              if lazycomatch then replace_for_lazy tmp_cases else ([], tmp_cases)
+            in
             let case =
               Exp.case (construct_from_string c.Linear.id) anchor_ident
             in
@@ -452,12 +542,17 @@ module Trans = struct
         Exp.let_ Nonrecursive [Vb.mk id_pat body] acc
       ) xs e
 
-  let full id ty cocases =
+  let full lazycomatch id ty cocases =
     let qts = Linear.group (Linear.linearize_cocases cocases) in
     (* print_endline (Linear.show qts); (* uncomment to debug *)  *)
-    let (cases,xs) = implode ty qts in
-    let (lazy_vbs,new_cases) = replace_for_lazy cases in
-    let dispatch_expr = mk_dispatch_expr lazy_vbs new_cases ty in
+    let (cases,xs) = implode lazycomatch ty qts in
+    let dispatch_expr =
+      if lazycomatch then
+        let (lazy_vbs,new_cases) = replace_for_lazy cases in
+        mk_dispatch_expr lazy_vbs new_cases ty
+      else
+        mk_dispatch_expr [] cases ty
+    in
     let full_body = collapse_let_in xs dispatch_expr in
     entrance id ty full_body
 
@@ -497,18 +592,25 @@ and adapt = Longident.(function
 
 and core_type_desc = function
   | S.Ptyp_any ->
-      Ptyp_any
+     Ptyp_any
   | S.Ptyp_var s ->
-      Ptyp_var s
+     Ptyp_var s
   | S.Ptyp_arrow (arg, core_ty1, core_ty2) ->
-      Ptyp_arrow (arg, core_type core_ty1, core_type core_ty2)
+     Ptyp_arrow (arg, core_type core_ty1, core_type core_ty2)
+  | S.Ptyp_coarrow (core_ty1, { S.ptyp_desc = S.Ptyp_constr (lid, tys) }) ->
+     (* A coarrow of the form τ ← ε(̱τ⋆) is translated into a
+         type constructor application ε(〚 τ 〛 query, 〚 τ⋆ 〛) *)
+     Trans.ty_observation_request (core_type core_ty1) lid.txt (List.map core_type tys)
+  | S.Ptyp_coarrow (_core_ty1, _) ->
+     assert false
   | S.Ptyp_tuple core_tys ->
       Ptyp_tuple (List.map core_type core_tys)
   | S.Ptyp_constr (lid,core_tys) ->
       let last_lid = Longident.last lid.txt in
       if last_lid.[0] = '!' then
         (* if it is a cotype and we have to add a parameter 'codata' *)
-        Ptyp_constr (lid, List.map core_type (Trans.codata :: core_tys))
+        let lid' = Trans.lid_map_last string_tail lid.txt in
+        Ptyp_constr (Location.mkloc lid' lid.loc, List.map core_type (Trans.codata :: core_tys))
       else if last_lid.[0] = '-' then
         (* if it is a cotype but we already added a 'codata' parameter
            so we just delete the mark '-' *)
@@ -676,8 +778,8 @@ and expression_desc = function
       Pexp_extension (extension ext)
   | S.Pexp_unreachable ->
       Pexp_unreachable
-  | S.Pexp_comatch (id,ty,cs) ->
-      expression_desc (Trans.full id ty cs)
+  | S.Pexp_comatch (lazymodifier, id,ty,cs) ->
+      expression_desc (Trans.full lazymodifier id ty cs)
 
 and case x = {
   pc_lhs = pattern x.S.pc_lhs;
