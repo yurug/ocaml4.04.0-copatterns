@@ -1,0 +1,5 @@
+.PHONY: dist
+
+dist:
+	git archive --format=tar --prefix=ocaml4.04.1-copatterns/ HEAD \
+        | bzip2 -9 > ocaml4.04.1-copatterns.tar.bz2
