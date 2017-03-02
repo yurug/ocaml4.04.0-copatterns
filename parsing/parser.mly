@@ -462,7 +462,15 @@ let package_type_of_module_type pmty =
       err pmty.pmty_loc
         "only module type identifier and 'with type' constraints are supported"
 
-
+let check_type_identifier id loc = function
+  (* abstract types can start with a bang or not *)
+  | Ptype_abstract -> ()
+  (* cotypes start with a bang *)
+  | Ptype_cotype _ ->
+     if not (id.[0] = '!') then expecting loc "bang (\"!\")"
+  (* otherwise, should not start with a bang *)
+  | _ ->
+     if (id.[0] = '!') then not_expecting loc "bang (\"!\")"
 %}
 
 /* Tokens */
@@ -1956,6 +1964,7 @@ type_declaration:
     TYPE ext_attributes nonrec_flag optional_type_parameters type_lident
     type_kind constraints post_item_attributes
       { let (kind, priv, manifest) = $6 in
+        check_type_identifier $5 5 kind;
         let (ext, attrs) = $2 in
         let ty =
           Type.mk (mkrhs $5 5) ~params:$4 ~cstrs:(List.rev $7) ~kind
