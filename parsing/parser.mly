@@ -1580,6 +1580,8 @@ simple_expr:
       { unclosed "{<" 3 ">}" 5 }
   | simple_expr HASH label
       { mkexp(Pexp_send($1, $3)) }
+  | simple_expr HASH mod_longident
+      { mkexp(Pexp_cofield($1, mkrhs $3 3)) }
   | simple_expr HASHOP simple_expr
       { mkinfix $1 $2 $3 }
   | LPAREN MODULE ext_attributes module_expr RPAREN
@@ -1691,6 +1693,8 @@ comatch_cases:
 comatch_case:
     simple_copattern MINUSGREATER seq_expr
       { Exp.cocase $1 $3 }
+  | simple_copattern MINUSGREATER DOT
+      { Exp.cocase $1 (Exp.unreachable ~loc:(rhs_loc 3) ())}
 ;
 fun_def:
     MINUSGREATER seq_expr
