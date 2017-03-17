@@ -243,15 +243,26 @@ let point : type a. a -> a -> a !comonad = fun x y -> lazy comatch c : a !comona
 | c#Proj  -> x
 | c#Right -> repeat y
 
+let comonad_abstract_dispatch :
+  type a o.
+       ((a query, a) comonad -> a)
+       -> ((a !stream query, a) comonad -> a !stream)
+       -> ((o query, a) comonad -> o) = fun on_proj on_direction ->
+    function
+    | Proj -> on_proj Proj
+    | Left -> on_direction Left
+    | Right -> on_direction Right
+
 let go : type a.
   (a !stream query, a) comonad -> (a !comonad -> a !stream) -> (a !comonad -> a !stream)
   -> a !comonad -> a !comonad = fun direction fwd bwd com ->
   let bs = comatch s : a !stream with s # Head -> proj com | s # Tail -> bwd com in
   let fs = com |> fwd |> tail in
-  let dispatch : type o. (o query, a) comonad -> o = function
-  | Proj  -> com |> fwd |> head
-  | Left  -> if direction = Left  then fs else bs
-  | Right -> if direction = Right then fs else bs
+  let dispatch : type o. (o query, a) comonad -> o = fun o ->
+  comonad_abstract_dispatch
+    (fun _ -> com |> fwd |> head)
+    (fun direction' -> if direction = direction' then fs else bs
+    ) o
   in
   COMONAD { dispatch }
 
