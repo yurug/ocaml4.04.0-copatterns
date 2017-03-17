@@ -266,6 +266,9 @@ module S : sig
     | Pexp_comatch of bool * string loc * core_type * cocase list
     (* [lazy] comatch x : T with Q1 -> E1 | ... | Qn -> En *)
 
+    | Pexp_cofield of expression * Longident.t loc
+    (* E#Q *)
+
     | Pexp_fun of arg_label * expression option * pattern * expression
     (* fun P -> E1                          (Simple, None)
        fun ~l:P -> E1                       (Labelled l, None)

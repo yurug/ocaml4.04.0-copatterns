@@ -127,6 +127,7 @@ module Exp = struct
   let constraint_ ?loc ?attrs a b = mk ?loc ?attrs (Pexp_constraint (a, b))
   let coerce ?loc ?attrs a b c = mk ?loc ?attrs (Pexp_coerce (a, b, c))
   let send ?loc ?attrs a b = mk ?loc ?attrs (Pexp_send (a, b))
+  let cofield ?loc ?attrs a b = mk ?loc ?attrs (Pexp_cofield (a, b))
   let new_ ?loc ?attrs a = mk ?loc ?attrs (Pexp_new a)
   let setinstvar ?loc ?attrs a b = mk ?loc ?attrs (Pexp_setinstvar (a, b))
   let override ?loc ?attrs a = mk ?loc ?attrs (Pexp_override a)
