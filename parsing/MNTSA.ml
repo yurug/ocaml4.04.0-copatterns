@@ -55,7 +55,7 @@ module Linear = struct
   (* A copattern token is either of the form:
      - p         (applicative) where p is a pattern
      - d         where d is a destructor
-     - (d : ty)  where d is a destructor and ty is a coretype
+     - (d : ty)  where d is a destructor and ty is a core type
   *)
 
   type token =
@@ -113,11 +113,13 @@ module Linear = struct
   let insert key value xs =
     let rec aux acc = function
       | (k,v) :: xs when k.txt = key.txt ->
-          List.rev acc @ (k,v @ [value]) :: xs
+         (* FIXME: orelse
+            List.rev ((k,v @ [value]) :: acc) @ xs *)
+         List.rev acc @ (k,v @ [value]) :: xs
       | x :: xs ->
-          aux (x :: acc) xs
+         aux (x :: acc) xs
       | [] ->
-          List.rev ((key,[value]) :: acc)
+         List.rev ((key,[value]) :: acc)
     in aux [] xs
 
   (* We transform linear copattern matching into Qtrees.
@@ -131,14 +133,14 @@ module Linear = struct
      - If a qtree is final (i.e we reach a final cocase), the qtree children is
      just an expression. Otherwise, it is a list of qtrees.
 
-     Examples
+       Examples
      --------
 
      A) the corresponding qtree resulting from translating the copattern
      matching below
 
      comatch f : ty with
-      | f#D1 : ty2#D2 -> M
+      | f#(D1 : ty2)#D2 -> M
       | f#D1#D3 -> N
 
      is
@@ -150,12 +152,12 @@ module Linear = struct
   *)
 
   type qtree = {
-    token : string loc;            (* FIXME : should be a copattern token *)
-    ntype : S.core_type option;
-    children : leaf;
+    token    : string loc;            (* FIXME : should be a copattern token *)
+    ntype    : S.core_type list;
+    children : children;
   }
 
-  and leaf =
+  and children =
     | Expr of S.expression
     | QTrees of qtree list
 
@@ -163,7 +165,7 @@ module Linear = struct
 
   (* FIXME #doc *)
 
-  let index acc lcocase = match lcocase.lhs with
+  let insert_tokens acc lcocase = match lcocase.lhs with
     | [] -> []
     | LDes (id, typ) :: qs -> insert id (typ, {lcocase with lhs = qs}) acc
     | LApp _ :: _ -> failwith "QApp::todo"
@@ -171,27 +173,30 @@ module Linear = struct
   (* FIXME #doc *)
 
   let split_branches qs =
-    let rec aux (typ, cs) = function
+    let rec aux (tys, cs) = function
       | [] ->
-          (typ, List.rev cs)
-      | (ntyp, c) :: qs ->
-          let typ = match ntyp with
-            | None -> typ
-            | Some typ' -> Some typ' (* FIXME: Add a check if typ <> None *)
-          in
-          aux (typ, c :: cs) qs
+         (tys, List.rev cs)
+      | (nty, c) :: qs ->
+         let tys = match nty with None -> tys | Some ty -> ty :: tys in
+         aux (tys, c :: cs) qs
     in
-    aux (None, []) qs
+    aux ([], []) qs
 
   (* FIXME #doc *)
 
-  let rec group (xs : linear_cocase list) =
-    List.fold_left index [] xs >>= fun (id,qs) ->
-    let typ, qs = split_branches qs in
-    let (qs1,qs2) = List.partition is_final qs in
-    let res1 = List.map (fun q -> qtree id typ (Expr q.rhs)) qs1 in
-    if qs2 = [] then res1
-    else res1 @ [qtree id typ (QTrees (group qs2))]
+  (** [unnest xs] takes the branches of a copattern-matching as input
+     and returns a list of qtrees which represent an unnested
+     copattern-matching.
+   *)
+  let rec unnest (xs : linear_cocase list) =
+    List.fold_left insert_tokens [] xs >>= fun (id, qs) ->
+    let (tys, qs)  = split_branches qs in
+    let (qs1, qs2) = List.partition is_final qs in
+    let res1 = List.map (fun q -> qtree id tys (Expr q.rhs)) qs1 in
+    let sub_copattern_matching =
+      if qs2 = [] then [] else [qtree id tys (QTrees (unnest qs2))]
+    in
+    res1 @ sub_copattern_matching
 
   (* FIXME #doc *)
 
@@ -207,28 +212,26 @@ module Linear = struct
       is_prefix lps1 lps2 || is_prefix lps2 lps1
     in
     let is_redundant above_branches branch =
-      let r =
-        not (List.exists (fun (not_redundant, other_branch) ->
-            not_redundant && hide other_branch.lhs branch.lhs
-          ) above_branches)
-      in
-      if not r then (
-        let loc = location_of_token (List.hd branch.lhs) in
-        Location.prerr_warning loc Warnings.Unreachable_case
-      );
-      (r, branch)
+      List.exists (fun (not_redundant, other_branch) ->
+        not_redundant && hide other_branch.lhs branch.lhs
+      ) above_branches
+    in
+    let issue_redundancy_warning branch =
+      let loc = location_of_token (List.hd branch.lhs) in
+      Location.prerr_warning loc Warnings.Unreachable_case;
     in
     let rec aux seen = function
       | [] ->
-          List.(rev_map snd (filter fst seen))
+         List.(rev_map snd (filter fst seen))
       | branch :: cocases ->
-          aux (is_redundant seen branch :: seen) cocases
+         let redundant_branch = is_redundant seen branch in
+         if redundant_branch then issue_redundancy_warning branch;
+         aux ((not redundant_branch, branch) :: seen) cocases
     in
     aux [] cocases
 
-  let linearize_cocases cocases =
-    let lcocases = linear_cocase <$> cocases in
-    filter_redundant lcocases
+  let active_linear_cocases cocases =
+    filter_redundant (linear_cocase <$> cocases)
 
   (* DEBUG *)
 
@@ -356,9 +359,7 @@ module Trans = struct
     let res = Typ.constr lid (codata_type :: params) in
     Type.constructor uname ~args ~res
 
-  (* FIXME (delete unicode) *)
-  (** [coarrow 〚o〛 ε〚τs〛] is the translation for o ← ε(τs),
-      that is ε(〚o〛 query, 〚τs〛). *)
+  (* FIXME #doc *)
 
   let coarrow core_type_mapper output_ty ty =
     let new_ty = core_type_mapper ty in
@@ -380,7 +381,7 @@ module Trans = struct
           | Some {S.ptyp_desc = S.Ptyp_constr (_, params) } ->
               core_type_mapper <$> params
           | _ ->
-              assert false (* TODO *)
+             failwith "Syntax error in cotype declaration"
         in
         let res = Typ.constr lid (query :: params) in
         Type.constructor ~res cld.S.pcld_name
@@ -568,9 +569,9 @@ module Trans = struct
   let pat_cstr_from_str s =
     Pat.construct ~loc:s.loc (lid_from_string_loc s) None
 
-  let implode expr_mapper is_lazy ty qts =
-    let rec implode ty qts =
-      let aux qt (cases,to_deploy) = match qt.Linear.children with
+  let implode expr_mapper is_lazy qts =
+    let rec implode qts =
+      let aux qt (cases, to_deploy) = match qt.Linear.children with
         | Linear.Expr expr ->
             (* final *)
             let new_expr = expr_mapper expr in
@@ -581,19 +582,16 @@ module Trans = struct
             let anchor = fresh_fid () in
             let anchor_lid = mknoloc_lid anchor in
             let anchor_ident = Exp.ident anchor_lid in
-            let ty = match qt.Linear.ntype with
-              | None -> ty (* FIXME! *)
-              | Some ty -> ty in
-            let (tmp_cases,xs) = implode ty qts in
+            let tys = qt.Linear.ntype in
+            let (tmp_cases,xs) = implode qts in
             let (lazy_vbs, new_cases) =
-              if is_lazy then replace_for_lazy tmp_cases
-              else ([], tmp_cases)
+              if is_lazy then replace_for_lazy tmp_cases else ([], tmp_cases)
             in
             let pat = pat_cstr_from_str qt.Linear.token in
             let case = Exp.case pat anchor_ident in
-            (case :: cases, xs @ (anchor,ty,lazy_vbs,new_cases) :: to_deploy)
+            (case :: cases, xs @ (anchor,tys,lazy_vbs,new_cases) :: to_deploy)
       in List.fold_right aux qts ([],[])
-    in implode ty qts
+    in implode qts
 
   (* FIXME #doc #name *)
 
@@ -602,7 +600,12 @@ module Trans = struct
     | p::ps -> assert (p = codata_type); ps
 
   let fold_let_ core_ty_mapper xs expr =
-    let fold_one (id,ty,lazy_vbs,cases) acc =
+    let fold_one (id,(tys : Parsetree_alpha.S.core_type list),lazy_vbs,cases) acc =
+      let (ty, _tys) =
+        match tys with
+        | [] -> failwith "A type annotation is missing in a copattern."
+        | ty :: tys -> (ty, tys)
+      in
       let pat = Pat.var (mknoloc id) in
       let new_ty = core_ty_mapper ty in
       let (ty_name,params) = from_typ_constr new_ty.ptyp_desc in
@@ -617,9 +620,9 @@ module Trans = struct
     let new_ty = core_ty_mapper ty in
     let (ty_name,params) = from_typ_constr new_ty.ptyp_desc in
     let params = skip_codata params in
-    let qts = Linear.(group (linearize_cocases cocases)) in
+    let qts = Linear.(unnest (active_linear_cocases cocases)) in
     (* print_endline (Linear.show qts); *)
-    let (cases,xs) = implode expr_mapper is_lazy ty qts in
+    let (cases, xs) = implode expr_mapper is_lazy qts in
     let dispatch_expr =
       if is_lazy then
         let (lazy_vbs,new_cases) = replace_for_lazy cases in
