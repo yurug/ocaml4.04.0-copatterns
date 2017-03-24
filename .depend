@@ -126,9 +126,9 @@ parsing/longident.cmo : utils/misc.cmi parsing/longident.cmi
 parsing/longident.cmx : utils/misc.cmx parsing/longident.cmi
 parsing/longident.cmi :
 parsing/MNTSA.cmo : parsing/parsetree_alpha.cmi parsing/parsetree.cmi \
-    parsing/MNTSA.cmi
+    parsing/syntaxerr.cmi parsing/MNTSA.cmi
 parsing/MNTSA.cmx : parsing/parsetree_alpha.cmi parsing/parsetree.cmi \
-    parsing/MNTSA.cmi
+    parsing/syntaxerr.cmi parsing/MNTSA.cmi
 parsing/MNTSA.cmi :
 parsing/parse.cmo : parsing/syntaxerr.cmi parsing/parser.cmi \
     parsing/location.cmi parsing/lexer.cmi parsing/docstrings.cmi \

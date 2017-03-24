@@ -52,8 +52,8 @@ UTILS=utils/config.cmo utils/misc.cmo \
 PARSING=parsing/location.cmo parsing/longident.cmo \
   parsing/docstrings_alpha.cmo parsing/ast_helper_alpha.cmo \
   parsing/docstrings.cmo parsing/ast_helper.cmo \
-  parsing/MNTSA.cmo \
-  parsing/syntaxerr.cmo parsing/parser.cmo \
+  parsing/syntaxerr.cmo parsing/MNTSA.cmo \
+  parsing/parser.cmo \
   parsing/lexer.cmo parsing/parse.cmo parsing/printast.cmo \
   parsing/pprintast.cmo \
   parsing/ast_mapper.cmo parsing/ast_iterator.cmo parsing/attr_helper.cmo \
