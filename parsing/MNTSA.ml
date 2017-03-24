@@ -66,7 +66,7 @@ module Linear = struct
     | LApp p -> p.S.ppat_loc
     | LDes (d, _) -> d.loc
 
-  (* FIXME: alpha-equivalence for applicative token ? *)
+  (* FIXME: alpha-equivalence for applicative token.*)
   let equal_token l1 l2 =
     match l1, l2 with
     | LApp _, LApp _ -> (* FIXME *) false
@@ -133,17 +133,14 @@ module Linear = struct
      - If a qtree is final (i.e we reach a final cocase), the qtree children is
      just an expression. Otherwise, it is a list of qtrees.
 
-       Examples
-     --------
-
-     A) the corresponding qtree resulting from translating the copattern
-     matching below
+     For instance, the corresponding qtree resulting from translating the copattern
+     matching below:
 
      comatch f : ty with
       | f#(D1 : ty2)#D2 -> M
       | f#D1#D3 -> N
 
-     is
+     is:
                    D2 -> M
                  /
      D1 : ty2 --⟨
@@ -167,8 +164,10 @@ module Linear = struct
 
   let insert_tokens acc lcocase = match lcocase.lhs with
     | [] -> []
-    | LDes (id, typ) :: qs -> insert id (typ, {lcocase with lhs = qs}) acc
-    | LApp _ :: _ -> failwith "QApp::todo"
+    | LDes (id,typ) :: qs ->
+        insert id (typ, {lcocase with lhs = qs}) acc
+    | LApp _ :: _ ->
+        assert false            (* by parsing *)
 
   (* FIXME #doc *)
 
@@ -188,6 +187,7 @@ module Linear = struct
      and returns a list of qtrees which represent an unnested
      copattern-matching.
    *)
+
   let rec unnest (xs : linear_cocase list) =
     List.fold_left insert_tokens [] xs >>= fun (id, qs) ->
     let (tys, qs)  = split_branches qs in
@@ -257,7 +257,24 @@ end
 
 module Trans = struct
 
-  open Ast_helper
+  (* Errors *)
+
+  type error =
+    | Missing_type_annotation of Location.t
+
+  let prepare_error = function
+    | Missing_type_annotation loc ->
+        Location.errorf ~loc
+          "In nested copattern-matching, a type annotation is expected."
+
+  exception Error of error
+
+  let () =
+    Location.register_error_of_exn
+      (function
+        | Error err -> Some (prepare_error err)
+        | _ -> None
+      )
 
   (* Generators *)
 
@@ -281,6 +298,8 @@ module Trans = struct
       "__rhs__" ^ string_of_int !i
 
   (* Codata and query types, dispatch handlers. *)
+
+  open Ast_helper
 
   let codata_type =
     let name = mknoloc_lid "Pervasives.codata"
@@ -380,8 +399,8 @@ module Trans = struct
               core_type_mapper <$> params
           | Some {S.ptyp_desc = S.Ptyp_constr (_, params) } ->
               core_type_mapper <$> params
-          | _ ->
-             failwith "Syntax error in cotype declaration"
+          (* Already checked by Parser.check_indexed_cotype. *)
+          | _ -> assert false
         in
         let res = Typ.constr lid (query :: params) in
         Type.constructor ~res cld.S.pcld_name
@@ -412,16 +431,14 @@ module Trans = struct
      let tail (Stream {dispatch}) = dispatch Tail
   *)
 
-  (* FIXME #names *)
-
   let getters {txt = ty_name} clds =
     let uname = Longident.parse (String.uppercase_ascii (skip_bang ty_name)) in
-    let rpat = Pat.record [(dispatch_lid, Pat.var dispatch_id)] Closed in
-    let upat = Pat.construct (mknoloc uname) (Some rpat) in
+    let rec_pat = Pat.record [(dispatch_lid, Pat.var dispatch_id)] Closed in
+    let cons_pat = Pat.construct (mknoloc uname) (Some rec_pat) in
     let getter {S.pcld_name} =
       let lid = lid_from_string_loc pcld_name in
       let cons = Exp.construct lid None in
-      let body = Exp.fun_ Nolabel None upat (apply_to_dispatch cons) in
+      let body = Exp.fun_ Nolabel None cons_pat (apply_to_dispatch cons) in
       let pat = lower_first_char pcld_name.txt in
       let var = Pat.var (mknoloc pat) in
       Vb.mk var body
@@ -440,9 +457,8 @@ module Trans = struct
      This is done thanks to this [wrap_type_annotation] function.
   *)
 
-  let check_variable vl _loc v =
-    if List.mem v vl then failwith "Variable_in_scope"
-  (* FIXME raise Syntaxerr.(Error(Variable_in_scope(loc,v))) *)
+  let check_variable vl loc v =
+    if List.mem v vl then raise Syntaxerr.(Error(Variable_in_scope(loc,v)))
 
   let varify_constructors var_names t =
     let rec loop t =
@@ -599,11 +615,11 @@ module Trans = struct
     | [] -> assert false
     | p::ps -> assert (p = codata_type); ps
 
-  let fold_let_ core_ty_mapper xs expr =
-    let fold_one (id,(tys : Parsetree_alpha.S.core_type list),lazy_vbs,cases) acc =
+  let fold_let loc core_ty_mapper xs expr =
+    let fold_one (id,tys,lazy_vbs,cases) acc =
       let (ty, _tys) =
         match tys with
-        | [] -> failwith "A type annotation is missing in a copattern."
+        | [] -> raise (Error (Missing_type_annotation loc))
         | ty :: tys -> (ty, tys)
       in
       let pat = Pat.var (mknoloc id) in
@@ -616,7 +632,7 @@ module Trans = struct
 
   (* FIXME #doc *)
 
-  let comatch_ expr_mapper core_ty_mapper is_lazy id ty cocases =
+  let comatch_ loc expr_mapper core_ty_mapper is_lazy id ty cocases =
     let new_ty = core_ty_mapper ty in
     let (ty_name,params) = from_typ_constr new_ty.ptyp_desc in
     let params = skip_codata params in
@@ -630,7 +646,7 @@ module Trans = struct
       else
         mk_dispatch_expr [] cases ty_name params
     in
-    let full_body = fold_let_ core_ty_mapper xs dispatch_expr in
+    let full_body = fold_let loc core_ty_mapper xs dispatch_expr in
     entrance id new_ty full_body
 
 end
@@ -661,10 +677,10 @@ and payload = function
 
 (* Type expressions *)
 
-and core_type {S.ptyp_desc; ptyp_loc; ptyp_attributes} = {
-  ptyp_desc = core_type_desc ptyp_desc;
-  ptyp_loc;
-  ptyp_attributes = attributes ptyp_attributes
+and core_type c_ty = {
+  ptyp_desc = core_type_desc c_ty.S.ptyp_desc;
+  ptyp_loc = c_ty.S.ptyp_loc;
+  ptyp_attributes = attributes c_ty.S.ptyp_attributes
 }
 
 and core_type_desc = function
@@ -711,10 +727,10 @@ and row_field = function
 
 (* Patterns *)
 
-and pattern {S.ppat_desc; ppat_loc; ppat_attributes} = {
-  ppat_desc = pattern_desc ppat_desc;
-  ppat_loc = ppat_loc;
-  ppat_attributes = attributes ppat_attributes;
+and pattern pat = {
+  ppat_desc = pattern_desc pat.S.ppat_desc;
+  ppat_loc = pat.S.ppat_loc;
+  ppat_attributes = attributes pat.S.ppat_attributes;
 }
 
 and pattern_desc = function
@@ -758,13 +774,13 @@ and pattern_desc = function
 
 (* Value expressions *)
 
-and expression {S.pexp_desc; pexp_loc; pexp_attributes} = {
-  pexp_desc = expression_desc pexp_desc;
-  pexp_loc;
-  pexp_attributes = attributes pexp_attributes;
+and expression exp = {
+  pexp_desc = expression_desc exp.S.pexp_loc exp.S.pexp_desc;
+  pexp_loc = exp.S.pexp_loc;
+  pexp_attributes = attributes exp.S.pexp_attributes;
 }
 
-and expression_desc = function
+and expression_desc loc = function
   | S.Pexp_ident lid ->
       Pexp_ident lid
   | S.Pexp_constant c ->
@@ -840,14 +856,14 @@ and expression_desc = function
   | S.Pexp_unreachable ->
       Pexp_unreachable
   | S.Pexp_comatch (is_lazy,id,ty,cs) ->
-      Trans.comatch_ expression core_type is_lazy id ty cs
+      Trans.comatch_ loc expression core_type is_lazy id ty cs
   | S.Pexp_cofield (e,lid) ->
       Trans.cofield (expression e) lid
 
-and case x = {
-  pc_lhs = pattern x.S.pc_lhs;
-  pc_guard = map_option expression x.S.pc_guard;
-  pc_rhs = expression x.S.pc_rhs;
+and case c = {
+  pc_lhs = pattern c.S.pc_lhs;
+  pc_guard = map_option expression c.S.pc_guard;
+  pc_rhs = expression c.S.pc_rhs;
 }
 
 (* Value descriptions *)

@@ -462,15 +462,73 @@ let package_type_of_module_type pmty =
       err pmty.pmty_loc
         "only module type identifier and 'with type' constraints are supported"
 
-let check_type_identifier id loc = function
-  (* abstract types can start with a bang or not *)
+(* Concerning type names with a bang :
+   - An abstract type can start with a bang, or not.
+   - A cotype starts with a bang.
+   - Otherwise, it should not start with a bang.
+*)
+
+let check_type_identifier id term = function
   | Ptype_abstract -> ()
-  (* cotypes start with a bang *)
   | Ptype_cotype _ ->
-     if not (id.[0] = '!') then expecting loc "bang (\"!\")"
-  (* otherwise, should not start with a bang *)
+     if not (id.[0] = '!') then expecting term "bang (\"!\")"
   | _ ->
-     if (id.[0] = '!') then not_expecting loc "bang (\"!\")"
+     if id.[0] = '!' then not_expecting term "bang (\"!\")"
+
+(* In the expression "comatch s : ty with .." we expect ty to be
+   either a type constructor whose name starts with a bang, either
+   an arrow type whose rightmost core_type is a type constructor whose name
+   starts with a bang.
+*)
+
+let rec check_ty_in_comatch core_type = match core_type.ptyp_desc with
+  | Ptyp_constr (lid,_) ->
+     let id = Longident.last lid.txt in
+     if not (id.[0] = '!') then
+       raise Syntaxerr.(Error(Expecting(core_type.ptyp_loc, "cotype")))
+  | Ptyp_arrow (_,_,core_type) ->
+     check_ty_in_comatch core_type
+  | _ ->
+     raise Syntaxerr.(Error(Expecting(core_type.ptyp_loc, "cotype")))
+
+(* In the expression [comatch s : ty with cocases] we expect all the lhs
+   copatterns in the cocases to start with the identifier s.
+*)
+
+let check_id_in_cocases id_expected cocases =
+  let rec check_id_in_cocase copat = match copat.pcopat_desc with
+    | Pcopat_hole id ->
+       if not (id_expected = id.txt) then
+         raise Syntaxerr.(Error(Expecting(id.loc, id_expected)))
+    | Pcopat_destructor (copat,_,_) ->
+       check_id_in_cocase copat
+    | Pcopat_application (copat,_) ->
+       check_id_in_cocase copat
+  in List.iter (fun c -> check_id_in_cocase c.pcc_lhs) cocases
+
+(* In a cotype declaration, indexed cofield declarations
+   [type !t = {K : ty1 <- ty2}] we expect ty2 to be a type constructor whose
+   name is [!t].
+*)
+
+let check_indexed_tyname tyname_expected clds =
+  let err ty =
+    let mess = "an instance of " ^ tyname_expected in
+    raise Syntaxerr.(Error(Expecting(ty.ptyp_loc, mess)))
+  in
+  let check_index cotype = match cotype.pcld_index with
+    | None -> ()
+    | Some ({ptyp_desc = Ptyp_constr (tid,_) } as ty) ->
+       if not (tyname_expected = Longident.last tid.txt) then err ty
+    | Some ty ->
+       err ty
+  in List.iter check_index clds
+
+let check_indexed_cotype tid = function
+  | Ptype_cotype clds ->
+     check_indexed_tyname tid clds
+  | _ -> ()
+
 %}
 
 /* Tokens */
@@ -1380,8 +1438,11 @@ expr:
       { mkexp_attrs (Pexp_open($3, mkrhs $5 5, $7)) $4 }
   | FUNCTION ext_attributes opt_bar match_cases
       { mkexp_attrs (Pexp_function(List.rev $4)) $2 }
-  | lazy_modifier COMATCH val_ident COLON core_type WITH opt_bar comatch_cases
-      { mkexp(Pexp_comatch ($1,mkrhs $3 2,$5,List.rev $8))}
+  | lazy_modifier COMATCH val_ident COLON core_type WITH opt_bar comatch_cocases
+      { check_ty_in_comatch $5;
+        check_id_in_cocases $3 $8;
+        mkexp(Pexp_comatch ($1,mkrhs $3 2,$5,List.rev $8))
+      }
   | FUN ext_attributes labeled_simple_pattern fun_def
       { let (l,o,p) = $3 in
         mkexp_attrs (Pexp_fun(l, o, p, $4)) $2 }
@@ -1686,11 +1747,11 @@ match_case:
   | pattern MINUSGREATER DOT
       { Exp.case $1 (Exp.unreachable ~loc:(rhs_loc 3) ())}
 ;
-comatch_cases:
-    comatch_case                   { [ $1 ] }
-  | comatch_cases BAR comatch_case { $3::$1 }
+comatch_cocases:
+    comatch_cocase                   { [ $1 ] }
+  | comatch_cocases BAR comatch_cocase { $3::$1 }
 ;
-comatch_case:
+comatch_cocase:
     simple_copattern MINUSGREATER seq_expr
       { Exp.cocase $1 $3 }
   | simple_copattern MINUSGREATER DOT
@@ -1760,17 +1821,15 @@ lazy_modifier:
   LAZY { true }
 | /* empty */ { false }
 ;
-
+/* For the moment, we only accept simple copattern (destructors). */
 simple_copattern:
-  | LIDENT                         { mkcopat(Pcopat_hole (mkrhs $1 1)) }
-  | simple_copattern HASH UIDENT   { mkcopat(Pcopat_destructor ($1,mkrhs $3 3, None)) }
-  | simple_copattern HASH LPAREN UIDENT COLON core_type RPAREN { mkcopat(Pcopat_destructor ($1,mkrhs $4 3, Some $6)) }
-/*
-copattern:
-  | LIDENT                       { mkcopat(Pcopat_hole (mkrhs $1 1)) }
-  | simple_copattern HASH UIDENT { mkcopat(Pcopat_destructor ($1,mkrhs $3 3, None)) }
-  | copattern simple_pattern     { mkcopat(Pcopat_application ($1,mkrhs $2 2)) }
-*/
+  | LIDENT
+      { mkcopat(Pcopat_hole (mkrhs $1 1)) }
+  | simple_copattern HASH UIDENT
+      { mkcopat(Pcopat_destructor ($1,mkrhs $3 3, None)) }
+  | simple_copattern HASH LPAREN UIDENT COLON core_type RPAREN
+      { mkcopat(Pcopat_destructor ($1,mkrhs $4 3, Some $6)) }
+
 pattern:
   | pattern AS val_ident
       { mkpat(Ppat_alias($1, mkrhs $3 3)) }
@@ -1969,6 +2028,7 @@ type_declaration:
     type_kind constraints post_item_attributes
       { let (kind, priv, manifest) = $6 in
         check_type_identifier $5 5 kind;
+        check_indexed_cotype $5 kind;
         let (ext, attrs) = $2 in
         let ty =
           Type.mk (mkrhs $5 5) ~params:$4 ~cstrs:(List.rev $7) ~kind
@@ -2143,8 +2203,8 @@ colabel_declarations:
 ;
 colabel_declaration:
   colabel COLON poly_type_no_attr attributes
-    {
-      Type.cofield (mkrhs $1 1) $3 ~attrs:$4 ~loc:(symbol_rloc()) ~info:(symbol_info ())
+    { Type.cofield (mkrhs $1 1) $3 ~attrs:$4
+       ~loc:(symbol_rloc()) ~info:(symbol_info ())
     }
 | colabel COLON poly_type_no_attr attributes LESSMINUS simple_core_type attributes
       {
@@ -2324,7 +2384,7 @@ core_type2:
 ;
 
 simple_core_type:
-    simple_core_type2  %prec below_HASH
+    simple_core_type2 %prec below_HASH
       { $1 }
   | LPAREN core_type_comma_list RPAREN %prec below_HASH
       { match $2 with [sty] -> sty | _ -> raise Parse_error }
