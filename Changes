@@ -1,3 +1,30 @@
+OCaml 4.04.0+copatterns 0.2 :
+-----------------------------
+
+### Transformation:
+
+- Refactoring.
+
+### Improve syntactic assertions:
+
+- In a colabel declaration, the index type constructor's name
+  corresponds to the one which is bound in the current type declaration.
+  (Parser.check_indexed_cotype)
+- The type annotation in a comatch expression is a cotype.
+  (Parser.check_ty_in_comatch)
+- The hole identifiers for a copattern matching are the same in the full
+  set of copatterns and correspond to the one bound by the comatch.
+  (Parser.check_id_in_cocases)
+- At least a type annotation is declared in nested copatterns.
+  (MNTSA.Error.Missing_type_annotation)
+
+### Playground:
+
+- Add a playground folder for examples.
+- A complete example for streams.
+  (testsuite/trans/playground/qstream.ml)
+
+
 Next version (4.04.1):
 ----------------------
 
