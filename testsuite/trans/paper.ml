@@ -65,9 +65,9 @@ type ( 'a , 'b , 'e ) twobuffer =
 let z : (unread, read) ! fairbistream =
 let rec zfrom' : type a b . int -> (a , b , int ) twobuffer -> (a , b ) ! fairbistream = fun n buf ->
 comatch zf : (a , b ) ! fairbistream with
-| zfrom # BTail -> (match buf with E -> zfrom' (n + 1) (F (n, -n)))
-| zfrom # Left  -> (match buf with L x -> (x, zfrom' n E) | F (x, y) -> (x, zfrom' n (R y)))
-| zfrom # Right -> (match buf with R x -> (x, zfrom' n E) | F (x, y) -> (y, zfrom' n (L x)))
+| zf # BTail -> (match buf with E -> zfrom' (n + 1) (F (n, -n)))
+| zf # Left  -> (match buf with L x -> (x, zfrom' n E) | F (x, y) -> (x, zfrom' n (R y)))
+| zf # Right -> (match buf with R x -> (x, zfrom' n E) | F (x, y) -> (y, zfrom' n (L x)))
 in
 zfrom' 0 ( L 0)
 
