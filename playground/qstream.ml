@@ -403,5 +403,3 @@ module Monad : MONAD with type 'a t = 'a !stream = struct
   let return = repeat
   let ( >>= ) m f = join (map f m)
 end
-
-open Monad
