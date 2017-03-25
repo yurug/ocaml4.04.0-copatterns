@@ -212,7 +212,7 @@ let fold_while : type a. (a -> bool) -> (a -> a -> a) -> a !stream -> a =
 
 (* [span p s] returns the longest prefix of s that satisfies p, together with
    the remainder of the stream. Beware: this function may diverge if
-   every element of xs satisfies p, e.g. span even (repeat 0) will loop. *)
+   every element of s satisfies p, e.g. span even (repeat 0) will loop. *)
 
 let span p s =
   let rec aux acc s =
@@ -367,8 +367,8 @@ let rec unwords s : char !stream =
 
 (* [lines s] function breaks a stream of characters into a list of strings
    at newline characters. The resulting strings do not contain newlines.
-   Beware: if the stream of characters xs does not contain newline characters,
-   accessing the tail of lines xs will loop. *)
+   Beware: if the stream of characters s does not contain newline characters,
+   accessing the tail of lines s will loop. *)
 
 let rec lines s : string !stream =
   let (x,t) = break (fun c -> c = '\n') s in
