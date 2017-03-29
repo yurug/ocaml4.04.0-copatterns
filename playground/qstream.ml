@@ -9,7 +9,7 @@ type 'a !stream = {
 }
 
 (** A delay type.
-    Since we are working in CBV programming language, it is something necessary
+    Since we are working in CBV programming language, it is sometimes necessary
     to delay the arguments. *)
 
 type 'a !delay = { Force : 'a }
