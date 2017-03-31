@@ -481,42 +481,41 @@ let check_type_identifier id term = function
    starts with a bang.
 *)
 
-let rec check_ty_in_comatch core_type = match core_type.ptyp_desc with
-  | Ptyp_constr (lid,_) ->
-     let id = Longident.last lid.txt in
-     if not (id.[0] = '!') then
-       raise Syntaxerr.(Error(Expecting(core_type.ptyp_loc, "cotype")))
-  | Ptyp_arrow (_,_,core_type) ->
-     check_ty_in_comatch core_type
-  | _ ->
-     raise Syntaxerr.(Error(Expecting(core_type.ptyp_loc, "cotype")))
+let check_ty_in_comatch core_type =
+  let err loc = raise Syntaxerr.(Error(Expecting(loc,"cotype"))) in
+  let rec aux core_ty = match core_ty.ptyp_desc with
+    | Ptyp_constr (lid,_) ->
+       let id = Longident.last lid.txt in
+       if not (id.[0] = '!') then err core_type.ptyp_loc
+    | Ptyp_arrow (_,_,core_ty) ->
+       aux core_ty
+    | _ ->
+       err core_ty.ptyp_loc
+  in aux core_type
 
 (* In the expression [comatch s : ty with cocases] we expect all the lhs
    copatterns in the cocases to start with the identifier s.
 *)
 
 let check_id_in_cocases id_expected cocases =
-  let rec check_id_in_cocase copat = match copat.pcopat_desc with
+  let err loc = raise Syntaxerr.(Error(Expecting(loc,id_expected))) in
+  let rec check_hole_in_copat copat = match copat.pcopat_desc with
     | Pcopat_hole id ->
-       if not (id_expected = id.txt) then
-         raise Syntaxerr.(Error(Expecting(id.loc, id_expected)))
-    | Pcopat_destructor (copat,_,_) ->
-       check_id_in_cocase copat
-    | Pcopat_application (copat,_) ->
-       check_id_in_cocase copat
-  in List.iter (fun c -> check_id_in_cocase c.pcc_lhs) cocases
+       if not (id_expected = id.txt) then err id.loc
+    | Pcopat_destructor (copat,_,_) | Pcopat_application (copat,_) ->
+       check_hole_in_copat copat
+  in List.iter (fun c -> check_hole_in_copat c.pcc_lhs) cocases
 
-(* In a cotype declaration, indexed cofield declarations
-   [type !t = {K : ty1 <- ty2}] we expect ty2 to be a type constructor whose
-   name is [!t].
+(* In indexed colabel declarations [type !t = {K : ty1 <- ty2}] we expect
+   ty2 to be a type constructor whose name is [!t].
 *)
 
 let check_indexed_tyname tyname_expected clds =
   let err ty =
     let mess = "an instance of " ^ tyname_expected in
-    raise Syntaxerr.(Error(Expecting(ty.ptyp_loc, mess)))
+    raise Syntaxerr.(Error(Expecting(ty.ptyp_loc,mess)))
   in
-  let check_index cotype = match cotype.pcld_index with
+  let check_index coty = match coty.pcld_index with
     | None -> ()
     | Some ({ptyp_desc = Ptyp_constr (tid,_) } as ty) ->
        if not (tyname_expected = Longident.last tid.txt) then err ty
@@ -2035,13 +2034,15 @@ type_declaration:
             ~priv ?manifest ~attrs:(attrs@$8)
             ~loc:(symbol_rloc ()) ~docs:(symbol_docs ())
         in
-          ($3, ty, ext) }
+        ($3, ty, ext) }
 ;
 and_type_declaration:
     AND attributes optional_type_parameters type_lident type_kind constraints
     post_item_attributes
       { let (kind, priv, manifest) = $5 in
-          Type.mk (mkrhs $4 4) ~params:$3 ~cstrs:(List.rev $6)
+        check_type_identifier $4 4 kind;
+        check_indexed_cotype $4 kind;
+        Type.mk (mkrhs $4 4) ~params:$3 ~cstrs:(List.rev $6)
             ~kind ~priv ?manifest ~attrs:($2@$7) ~loc:(symbol_rloc ())
             ~text:(symbol_text ()) ~docs:(symbol_docs ()) }
 ;
