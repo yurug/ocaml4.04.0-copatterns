@@ -1,3 +1,10 @@
+OCaml 4.04.0+copatterns 0.3 :
+-----------------------------
+
+### Transformation:
+
+- New syntax for nested copatterns.
+
 OCaml 4.04.0+copatterns 0.2 :
 -----------------------------
 
