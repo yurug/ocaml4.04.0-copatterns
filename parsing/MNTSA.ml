@@ -38,6 +38,8 @@ let map_option f m = match m with
   | None -> None
   | Some x -> Some (f x)
 
+let is_some = function Some _ -> true | None -> false
+
 let ( >>= ) m f = List.fold_right (fun x acc -> f x @ acc) m []
 
 let ( <$> ) f m = List.map f m
@@ -64,13 +66,13 @@ module Linear = struct
 
   let location_of_token = function
     | LApp p -> p.S.ppat_loc
-    | LDes (d, _) -> d.loc
+    | LDes (d,_) -> d.loc
 
   (* FIXME: alpha-equivalence for applicative token.*)
   let equal_token l1 l2 =
     match l1, l2 with
     | LApp _, LApp _ -> (* FIXME *) false
-    | LDes (d1, _), LDes (d2, _) -> d1.txt = d2.txt
+    | LDes (d1,_), LDes (d2,_) -> d1.txt = d2.txt
     | _, _ -> false
 
   (* [linearize q] returns a list of tokens corresponding to the
@@ -88,8 +90,8 @@ module Linear = struct
           acc
       | S.Pcopat_application (q,p) ->
           loop (LApp p :: acc) q
-      | S.Pcopat_destructor (q,d,o) ->
-          loop (LDes (d, o) :: acc) q
+     | S.Pcopat_destructor (q,d,o) ->
+         loop (LDes (d, o) :: acc) q
     in loop [] q
 
   (* A linear cocase is a cocase whose left hand-side is linear. *)
@@ -150,7 +152,7 @@ module Linear = struct
 
   type qtree = {
     token    : string loc;            (* FIXME : should be a copattern token *)
-    ntype    : S.core_type list;
+    ntype    : S.core_type option;
     children : children;
   }
 
@@ -162,39 +164,44 @@ module Linear = struct
 
   (* FIXME #doc *)
 
-  let insert_tokens acc lcocase = match lcocase.lhs with
+  let insert_token acc lcocase = match lcocase.lhs with
     | [] -> []
-    | LDes (id,typ) :: qs ->
-        insert id (typ, {lcocase with lhs = qs}) acc
+    | LDes (id,ty) :: qs ->
+        insert id (ty, {lcocase with lhs = qs}) acc
     | LApp _ :: _ ->
         assert false            (* by parsing *)
 
   (* FIXME #doc *)
 
   let split_branches qs =
-    let rec aux (tys, cs) = function
+    let rec aux (ty, cs) = function
       | [] ->
-         (tys, List.rev cs)
-      | (nty, c) :: qs ->
-         let tys = match nty with None -> tys | Some ty -> ty :: tys in
-         aux (tys, c :: cs) qs
+          (ty, List.rev cs)
+      | (ty0, c) :: qs ->
+          let new_ty =
+            if is_some ty0
+            (* We already have a type annotation. *)
+            then ty0
+            (* Otherwise we propagate it. *)
+            else ty
+          in aux (new_ty, c :: cs) qs
     in
-    aux ([], []) qs
+    aux (None,[]) qs
 
   (* FIXME #doc *)
 
   (** [unnest xs] takes the branches of a copattern-matching as input
-     and returns a list of qtrees which represent an unnested
-     copattern-matching.
+      and returns a list of qtrees which represent an unnested
+      copattern-matching.
    *)
 
   let rec unnest (xs : linear_cocase list) =
-    List.fold_left insert_tokens [] xs >>= fun (id, qs) ->
-    let (tys, qs)  = split_branches qs in
-    let (qs1, qs2) = List.partition is_final qs in
-    let res1 = List.map (fun q -> qtree id tys (Expr q.rhs)) qs1 in
+    List.fold_left insert_token [] xs >>= fun (id, qs) ->
+    let (ty,qs) = split_branches qs in
+    let (qs1,qs2) = List.partition is_final qs in
+    let res1 = List.map (fun q -> qtree id ty (Expr q.rhs)) qs1 in
     let sub_copattern_matching =
-      if qs2 = [] then [] else [qtree id tys (QTrees (unnest qs2))]
+      if qs2 = [] then [] else [qtree id ty (QTrees (unnest qs2))]
     in
     res1 @ sub_copattern_matching
 
@@ -601,7 +608,8 @@ module Trans = struct
             let tys = qt.Linear.ntype in
             let (tmp_cases,xs) = implode qts in
             let (lazy_vbs, new_cases) =
-              if is_lazy then replace_for_lazy tmp_cases else ([], tmp_cases)
+              if is_lazy then replace_for_lazy tmp_cases
+              else ([], tmp_cases)
             in
             let pat = pat_cstr_from_str qt.Linear.token in
             let case = Exp.case pat anchor_ident in
@@ -609,21 +617,20 @@ module Trans = struct
       in List.fold_right aux qts ([],[])
     in implode qts
 
-  (* FIXME #doc #name *)
+  (* FIXME #doc *)
 
   let skip_codata = function
     | [] -> assert false
     | p::ps -> assert (p = codata_type); ps
 
   let fold_let loc core_ty_mapper xs expr =
-    let fold_one (id,tys,lazy_vbs,cases) acc =
-      let (ty, _tys) =
-        match tys with
-        | [] -> raise (Error (Missing_type_annotation loc))
-        | ty :: tys -> (ty, tys)
+    let fold_one (id,ty,lazy_vbs,cases) acc =
+      let new_ty0 = match ty with
+        | None -> raise (Error (Missing_type_annotation loc))
+        | Some ty -> ty
       in
       let pat = Pat.var (mknoloc id) in
-      let new_ty = core_ty_mapper ty in
+      let new_ty = core_ty_mapper new_ty0 in
       let (ty_name,params) = from_typ_constr new_ty.ptyp_desc in
       let params = skip_codata params in
       let body = mk_dispatch_expr lazy_vbs cases ty_name params in

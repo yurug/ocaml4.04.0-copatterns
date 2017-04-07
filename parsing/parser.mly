@@ -479,9 +479,10 @@ let check_type_identifier id term = function
    either a type constructor whose name starts with a bang, either
    an arrow type whose rightmost core_type is a type constructor whose name
    starts with a bang.
+   As well as in nested copattern matching.
 *)
 
-let check_ty_in_comatch core_type =
+let check_is_cotype core_type =
   let err loc = raise Syntaxerr.(Error(Expecting(loc,"cotype"))) in
   let rec aux core_ty = match core_ty.ptyp_desc with
     | Ptyp_constr (lid,_) ->
@@ -527,6 +528,37 @@ let check_indexed_cotype tid = function
   | Ptype_cotype clds ->
      check_indexed_tyname tid clds
   | _ -> ()
+
+(* Handle nested copattern matching. *)
+
+let plug_type typ copattern = match copattern.pcopat_desc with
+  | Pcopat_destructor (q,d,None) ->
+     { copattern with
+       pcopat_desc = Pcopat_destructor (q, d, Some typ)
+     }
+  | _ -> assert false
+
+let rec plug_prefix prefix copattern = match copattern.pcopat_desc with
+  | Pcopat_hole _ ->
+     prefix
+  | Pcopat_destructor (q,d,ty) ->
+     { copattern with
+       pcopat_desc = Pcopat_destructor (plug_prefix prefix q,d,ty)
+     }
+  | Pcopat_application (q,p) ->
+     { copattern with
+       pcopat_desc = Pcopat_application (plug_prefix prefix q,p)
+     }
+
+let handle_nested_copattern prefix typ cocases =
+  check_is_cotype typ;
+  let new_prefix = plug_type typ prefix in
+  List.map (fun cocase ->
+      { cocase with
+        pcc_lhs = plug_prefix new_prefix cocase.pcc_lhs
+      }
+    ) cocases
+
 
 %}
 
@@ -1438,7 +1470,7 @@ expr:
   | FUNCTION ext_attributes opt_bar match_cases
       { mkexp_attrs (Pexp_function(List.rev $4)) $2 }
   | lazy_modifier COMATCH val_ident COLON core_type WITH opt_bar comatch_cocases
-      { check_ty_in_comatch $5;
+      { check_is_cotype $5;
         check_id_in_cocases $3 $8;
         mkexp(Pexp_comatch ($1,mkrhs $3 2,$5,List.rev $8))
       }
@@ -1744,17 +1776,35 @@ match_case:
   | pattern WHEN seq_expr MINUSGREATER seq_expr
       { Exp.case $1 ~guard:$3 $5 }
   | pattern MINUSGREATER DOT
-      { Exp.case $1 (Exp.unreachable ~loc:(rhs_loc 3) ())}
+      { Exp.case $1 (Exp.unreachable ~loc:(rhs_loc 3) ()) }
 ;
 comatch_cocases:
-    comatch_cocase                   { [ $1 ] }
-  | comatch_cocases BAR comatch_cocase { $3::$1 }
+    comatch_cocase                              { $1 }
+  | comatch_cocases BAR comatch_cocase          { $3 @ $1 }
 ;
 comatch_cocase:
     simple_copattern MINUSGREATER seq_expr
-      { Exp.cocase $1 $3 }
+      { [Exp.cocase $1 $3] }
   | simple_copattern MINUSGREATER DOT
-      { Exp.cocase $1 (Exp.unreachable ~loc:(rhs_loc 3) ())}
+      { [Exp.cocase $1 (Exp.unreachable ~loc:(rhs_loc 3) ())]}
+  | simple_copattern COLON core_type WITH opt_bar nested_comatch_cocases
+      { handle_nested_copattern $1 $3 (List.flatten $6) }
+  | simple_copattern COLON core_type WITH BEGIN opt_bar nested_comatch_cocases END
+      { handle_nested_copattern $1 $3 (List.flatten $7) }
+;
+nested_comatch_cocases:
+    nested_comatch_cocase                            { [$1] }
+  | nested_comatch_cocases BAR nested_comatch_cocase { $3 :: $1 }
+;
+nested_comatch_cocase:
+    nested_copattern MINUSGREATER seq_expr
+      { [Exp.cocase $1 $3] }
+  | nested_copattern MINUSGREATER DOT
+      { [Exp.cocase $1 (Exp.unreachable ~loc:(rhs_loc 3) ())]}
+  | nested_copattern COLON core_type WITH opt_bar nested_comatch_cocases
+      { handle_nested_copattern $1 $3 (List.flatten $6) }
+  | nested_copattern COLON core_type WITH BEGIN opt_bar nested_comatch_cocases END
+      { handle_nested_copattern $1 $3 (List.flatten $7) }
 ;
 fun_def:
     MINUSGREATER seq_expr
@@ -1825,10 +1875,16 @@ simple_copattern:
   | LIDENT
       { mkcopat(Pcopat_hole (mkrhs $1 1)) }
   | simple_copattern HASH UIDENT
-      { mkcopat(Pcopat_destructor ($1,mkrhs $3 3, None)) }
-  | simple_copattern HASH LPAREN UIDENT COLON core_type RPAREN
-      { mkcopat(Pcopat_destructor ($1,mkrhs $4 3, Some $6)) }
-
+      { mkcopat(Pcopat_destructor ($1,mkrhs $3 3,None)) }
+;
+nested_copattern:
+  | DOTDOT HASH UIDENT
+      { let q = mkcopat(Pcopat_hole (mknoloc "..")) in
+        mkcopat(Pcopat_destructor (q, mkrhs $3 3, None))
+      }
+  | nested_copattern HASH UIDENT
+      { mkcopat(Pcopat_destructor ($1, mkrhs $3 3, None)) }
+;
 pattern:
   | pattern AS val_ident
       { mkpat(Ppat_alias($1, mkrhs $3 3)) }
