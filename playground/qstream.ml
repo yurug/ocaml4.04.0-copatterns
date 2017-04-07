@@ -43,8 +43,9 @@ let rec tails : type a. a !stream -> (a !stream) !stream =
 let rec intersperse : type a. a -> a !stream -> a !stream =
   fun x s -> comatch r : a !stream with
    | r#Head -> s#Head
-   | r#(Tail : a !stream)#Head -> x
-   | r#Tail#Tail -> intersperse x s#Tail
+   | r#Tail : a !stream with
+   | ..#Head -> x
+   | ..#Tail -> intersperse x s#Tail
 
 (* [interleave s1 s2] alternates elements from each list. *)
 
@@ -83,14 +84,13 @@ let scan1' f s = scan' f s#Head s#Tail
 
 let rec transpose : type a. (a !stream) !stream -> (a !stream) !stream =
   fun s -> comatch r : (a !stream) !stream with
-   | r#(Head : a !stream)#Head ->
-     s#Head#Head
-   | r#Head#Tail ->
-     map head s#Tail
-   | r#Tail ->
-      transpose @@ comatch t : (a !stream) !stream with
-        | t#Head -> s#Head#Tail
-        | t#Tail -> s#Tail
+   | r#Head : a !stream with begin
+     | ..#Head -> s#Head#Head
+     | ..#Tail -> map head s#Tail
+   end
+   | r#Tail -> transpose @@ comatch t : (a !stream) !stream with
+     | t#Head -> s#Head#Tail
+     | t#Tail -> s#Tail
 
 (** Building streams *)
 
@@ -361,8 +361,9 @@ let rec words s : string !stream =
 
 let rec unwords s : char !stream =
   let acc = comatch d : (char !stream) !delay with
-     | d#(Force : char !stream)#Head  -> ' '
-     | d#Force#Tail -> unwords s#Tail
+   | d#Force : char !stream with
+     | ..#Head  -> ' '
+     | ..#Tail -> unwords s#Tail
   in delayed_prefix (explode s#Head) acc
 
 (* [lines s] function breaks a stream of characters into a list of strings
@@ -381,8 +382,9 @@ let rec lines s : string !stream =
 
 let rec unlines s : char !stream =
   let acc = comatch d : (char !stream) !delay with
-     | d#(Force : char !stream)#Head  -> '\n'
-     | d#Force#Tail -> unlines s#Tail
+   | d#Force : char !stream with
+     | ..#Head  -> '\n'
+     | ..#Tail -> unlines s#Tail
   in delayed_prefix (explode s#Head) acc
 
 (* The Stream Monad *)
