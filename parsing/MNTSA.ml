@@ -397,17 +397,21 @@ module Trans = struct
 
   let cotype attributes_mapper core_type_mapper td lds =
     let tname = skip_bang td.S.ptype_name.txt in
-    let lid = mknoloc_lid tname in
     let params = fst <$> td.S.ptype_params in
     let constructor cld =
         let query = query_type (core_type_mapper cld.S.pcld_type) in
-        let params = match cld.S.pcld_index with
+        let (new_name,params) = match cld.S.pcld_index with
           | None ->
-              core_type_mapper <$> params
-          | Some {S.ptyp_desc = S.Ptyp_constr (_, params) } ->
-              core_type_mapper <$> params
-          (* Already checked by Parser.check_indexed_cotype. *)
+              (None, core_type_mapper <$> params)
+          | Some {S.ptyp_desc = S.Ptyp_constr (name, params) } ->
+              (Some name, core_type_mapper <$> params)
           | _ -> assert false
+        in
+        let lid = match new_name with
+          | None ->
+              mknoloc_lid tname
+          | Some name ->
+              { name with txt = map_last_lid skip_bang name.txt }
         in
         let res = Typ.constr lid (query :: params) in
         Type.constructor ~res cld.S.pcld_name

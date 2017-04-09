@@ -479,20 +479,26 @@ let check_type_identifier id term = function
    either a type constructor whose name starts with a bang, either
    an arrow type whose rightmost core_type is a type constructor whose name
    starts with a bang.
-   As well as in nested copattern matching.
+   As well as in nested copattern matching, and indexed colabel declarations.
 *)
 
-let check_is_cotype core_type =
-  let err loc = raise Syntaxerr.(Error(Expecting(loc,"cotype"))) in
-  let rec aux core_ty = match core_ty.ptyp_desc with
-    | Ptyp_constr (lid,_) ->
-       let id = Longident.last lid.txt in
-       if not (id.[0] = '!') then err core_type.ptyp_loc
+let expecting_cotype loc =
+  raise Syntaxerr.(Error (Expecting (loc,"cotype")))
+
+let check_constr_is_cotype core_ty = match core_ty.ptyp_desc with
+  | Ptyp_constr (lid,_) ->
+     let id = Longident.last lid.txt in
+     if not (id.[0] = '!') then expecting_cotype core_ty.ptyp_loc
+  | _ ->
+     expecting_cotype core_ty.ptyp_loc
+
+let rec check_is_cotype core_ty = match core_ty.ptyp_desc with
+    | Ptyp_constr (_,_) ->
+       check_constr_is_cotype core_ty
     | Ptyp_arrow (_,_,core_ty) ->
-       aux core_ty
+       check_is_cotype core_ty
     | _ ->
-       err core_ty.ptyp_loc
-  in aux core_type
+       expecting_cotype core_ty.ptyp_loc
 
 (* In the expression [comatch s : ty with cocases] we expect all the lhs
    copatterns in the cocases to start with the identifier s.
@@ -506,28 +512,6 @@ let check_id_in_cocases id_expected cocases =
     | Pcopat_destructor (copat,_,_) | Pcopat_application (copat,_) ->
        check_hole_in_copat copat
   in List.iter (fun c -> check_hole_in_copat c.pcc_lhs) cocases
-
-(* In indexed colabel declarations [type !t = {K : ty1 <- ty2}] we expect
-   ty2 to be a type constructor whose name is [!t].
-*)
-
-let check_indexed_tyname tyname_expected clds =
-  let err ty =
-    let mess = "an instance of " ^ tyname_expected in
-    raise Syntaxerr.(Error(Expecting(ty.ptyp_loc,mess)))
-  in
-  let check_index coty = match coty.pcld_index with
-    | None -> ()
-    | Some ({ptyp_desc = Ptyp_constr (tid,_) } as ty) ->
-       if not (tyname_expected = Longident.last tid.txt) then err ty
-    | Some ty ->
-       err ty
-  in List.iter check_index clds
-
-let check_indexed_cotype tid = function
-  | Ptype_cotype clds ->
-     check_indexed_tyname tid clds
-  | _ -> ()
 
 (* Handle nested copattern matching. *)
 
@@ -2083,7 +2067,6 @@ type_declaration:
     type_kind constraints post_item_attributes
       { let (kind, priv, manifest) = $6 in
         check_type_identifier $5 5 kind;
-        check_indexed_cotype $5 kind;
         let (ext, attrs) = $2 in
         let ty =
           Type.mk (mkrhs $5 5) ~params:$4 ~cstrs:(List.rev $7) ~kind
@@ -2097,7 +2080,6 @@ and_type_declaration:
     post_item_attributes
       { let (kind, priv, manifest) = $5 in
         check_type_identifier $4 4 kind;
-        check_indexed_cotype $4 kind;
         Type.mk (mkrhs $4 4) ~params:$3 ~cstrs:(List.rev $6)
             ~kind ~priv ?manifest ~attrs:($2@$7) ~loc:(symbol_rloc ())
             ~text:(symbol_text ()) ~docs:(symbol_docs ()) }
@@ -2259,37 +2241,42 @@ colabel_declarations:
   | colabel_declaration_semi colabel_declarations   { $1 :: $2 }
 ;
 colabel_declaration:
-  colabel COLON poly_type_no_attr attributes
-    { Type.cofield (mkrhs $1 1) $3 ~attrs:$4
-       ~loc:(symbol_rloc()) ~info:(symbol_info ())
-    }
-| colabel COLON poly_type_no_attr attributes LESSMINUS simple_core_type attributes
+    colabel COLON poly_type_no_attr attributes
       {
+       Type.cofield (mkrhs $1 1) $3 ~attrs:$4
+          ~loc:(symbol_rloc()) ~info:(symbol_info ())
+      }
+  | colabel COLON poly_type_no_attr attributes LESSMINUS
+        simple_core_type attributes
+      {
+       check_constr_is_cotype $6;
        Type.cofield (mkrhs $1 1) $3 ~attrs:($4 @ $7) ~index:$6
-         ~loc:(symbol_rloc()) ~info:(symbol_info ())
+          ~loc:(symbol_rloc()) ~info:(symbol_info ())
       }
 ;
 colabel_declaration_semi:
- colabel COLON poly_type_no_attr attributes SEMI attributes
+  colabel COLON poly_type_no_attr attributes SEMI attributes
       {
        let info =
          match rhs_info 4 with
          | Some _ as info_before_semi -> info_before_semi
          | None -> symbol_info ()
        in
-       Type.cofield (mkrhs $1 1) $3 ~attrs:($4 @ $6)
-         ~loc:(symbol_rloc()) ~info
+       Type.cofield (mkrhs $1 1) $3 ~attrs:($4 @ $6) ~loc:(symbol_rloc())
+          ~info
       }
-| colabel COLON poly_type_no_attr attributes LESSMINUS simple_core_type SEMI attributes
-      {
-       let info =
-         match rhs_info 4 with
-         | Some _ as info_before_semi -> info_before_semi
-         | None -> symbol_info ()
-       in
-       Type.cofield (mkrhs $1 1) $3 ~attrs:($4 @ $8) ~index:$6
-         ~loc:(symbol_rloc()) ~info
-      }
+  | colabel COLON poly_type_no_attr attributes LESSMINUS
+      simple_core_type SEMI attributes
+        {
+         check_constr_is_cotype $6;
+         let info =
+           match rhs_info 4 with
+           | Some _ as info_before_semi -> info_before_semi
+           | None -> symbol_info ()
+         in
+         Type.cofield (mkrhs $1 1) $3 ~attrs:($4 @ $8) ~index:$6
+            ~loc:(symbol_rloc()) ~info
+        }
 
 ;
 /* Type Extensions */
