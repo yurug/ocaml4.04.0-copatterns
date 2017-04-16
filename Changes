@@ -4,9 +4,11 @@ OCaml 4.04.0+copatterns 0.3 :
 ### Transformation:
 
 - New syntax for nested copatterns.
+- Verify that a child copattern is an instance of its parent.
+  (Parser.check_instance)
 
 ### Syntactic assertions:
-- Delegate verification for indexed colabel declaration to OCaml type checker.
+- Delegate verification for indexed colabel declaration to the OCaml type checker.
   (delete Parser.check_indexed_cotype)
 
 OCaml 4.04.0+copatterns 0.2 :
@@ -39,6 +41,10 @@ OCaml 4.04.0+copatterns 0.2 :
 - A complete example for streams.
   (playground/qstream.ml)
 
+OCaml 4.04.0+copatterns 0.1 :
+-----------------------------
+
+### Init
 
 Next version (4.04.1):
 ----------------------
