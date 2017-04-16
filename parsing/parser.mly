@@ -515,34 +515,158 @@ let check_id_in_cocases id_expected cocases =
 
 (* Handle nested copattern matching. *)
 
-let plug_type typ copattern = match copattern.pcopat_desc with
-  | Pcopat_destructor (q,d,None) ->
-     { copattern with
-       pcopat_desc = Pcopat_destructor (q, d, Some typ)
-     }
-  | _ -> assert false
+(* fixme: transfer this part in MNTSA.ml.
+   Remark: we have to change the AST in order to handle nested copattern
+   matching in MNTSA.ml
+ *)
+
+(* Tools. *)
+
+let plug_type_at_level ty lvl copattern =
+  let rec aux lvl copattern = match copattern.pcopat_desc with
+    | Pcopat_hole _ ->
+       assert false
+    | Pcopat_destructor (q,d,ty') ->
+       if lvl = 0 then CoPat.destructor ~loc:q.pcopat_loc q d (Some ty)
+       else CoPat.destructor ~loc:copattern.pcopat_loc (aux (pred lvl) q) d ty'
+    | Pcopat_application (q,p) ->
+       if lvl = 0 then assert false
+       else CoPat.application ~loc:copattern.pcopat_loc (aux (pred lvl) q) p
+  in aux lvl copattern
 
 let rec plug_prefix prefix copattern = match copattern.pcopat_desc with
   | Pcopat_hole _ ->
      prefix
   | Pcopat_destructor (q,d,ty) ->
-     { copattern with
-       pcopat_desc = Pcopat_destructor (plug_prefix prefix q,d,ty)
-     }
+     CoPat.destructor ~loc:copattern.pcopat_loc (plug_prefix prefix q) d ty
   | Pcopat_application (q,p) ->
-     { copattern with
-       pcopat_desc = Pcopat_application (plug_prefix prefix q,p)
-     }
+     CoPat.application ~loc:copattern.pcopat_loc (plug_prefix prefix q) p
 
-let handle_nested_copattern prefix typ cocases =
-  check_is_cotype typ;
-  let new_prefix = plug_type typ prefix in
+let copattern_length q =
+  let rec aux acc q = match q.pcopat_desc with
+    | Pcopat_hole _ -> acc
+    | Pcopat_destructor (q,_,_) -> aux (succ acc) q
+    | Pcopat_application (q,_) -> aux (succ acc) q
+  in aux 1 q
+
+let pop_copattern q = match q.pcopat_desc with
+  | Pcopat_hole _ -> assert false
+  | Pcopat_destructor (q,_,_) -> q
+  | Pcopat_application (q,_) -> q
+
+let rec npop_copattern q n =
+  if n <= 0 then q
+  else npop_copattern (pop_copattern q) (pred n)
+
+
+(* [p₁ ≼ p₂] iff the pattern p₁ is at least as much permissive
+   than the pattern p₂.
+
+    _            ≼ *
+    x            ≼ *
+    cnst₁        ≼ cnst₂            if cnst₁ = cnst₂
+    (p₁,..,pₙ)   ≼ (p₁',..pₙ')      if ∀ i, pᵢ ≼ pᵢ'
+    K p₁         ≼ K p₂             if p₁ ≼ p₂
+    exn p₁       ≼ exn p₂           if p₁ ≼ p₂
+    rec₁         ≼ rec₂             if ∀ ℓ ∈ rec₁, ℓ ∈ rec₂
+                                    and assoc(ℓ,rec₁) ≼ assoc (ℓ, rec₂)
+ *)
+
+let rec is_instance_pattern parent candidat =
+  match (parent.ppat_desc, candidat.ppat_desc) with
+  | (Ppat_any, _) ->
+     true
+  | (Ppat_var _, _) ->
+     true
+  | (Ppat_constant cnst1, Ppat_constant cnst2) ->
+     (cnst1 = cnst2)
+  | (Ppat_tuple ps1, Ppat_tuple ps2) ->
+     List.length ps1 = List.length ps2
+     && List.for_all2 is_instance_pattern ps1 ps2
+  | (Ppat_construct (k1,p1), Ppat_construct (k2,p2)) ->
+     k1.txt = k2.txt &&
+       begin match (p1,p2) with
+       | (None, None) -> true
+       | (Some x, Some y) -> is_instance_pattern x y
+       | _ -> false
+       end
+  | (Ppat_variant (k1,p1), Ppat_variant (k2,p2)) ->
+     k1 = k2 &&
+       begin match (p1,p2) with
+       | (None, None) -> true
+       | (Some x, Some y) -> is_instance_pattern x y
+       | _ -> false
+       end
+  | (Ppat_record (xs, flag1), Ppat_record (ys, flag2)) ->
+     is_instance_pattern_record xs ys flag1 flag2
+  | (Ppat_array ps1, Ppat_array ps2) ->
+     List.for_all2 is_instance_pattern ps1 ps2
+  | (Ppat_exception p1, Ppat_exception p2) ->
+     is_instance_pattern p1 p2
+  | (Ppat_lazy p1, Ppat_lazy p2) ->
+     is_instance_pattern p1 p2
+  | (Ppat_open (lid1,p1), Ppat_open (lid2,p2)) ->
+     lid1.txt = lid2.txt && is_instance_pattern p1 p2
+  (* Patterns that are currently not accepted.
+     fixme: some of them should be.
+   *)
+  | (Ppat_or _,_)
+  | (Ppat_alias _, _)
+  | (Ppat_interval _, _)
+  | (Ppat_constraint _,_)
+  | (Ppat_type _, Ppat_type _)
+  | (Ppat_unpack _, Ppat_unpack _)
+  | (Ppat_extension _,Ppat_extension _) ->
+     raise Syntaxerr.(Error(Other(candidat.ppat_loc)))
+  | _ ->
+     false
+
+and is_instance_pattern_record xs ys flag1 flag2 =
+  flag1 = flag2 &&
+    List.for_all (fun (lid1,p1) ->
+        let (_,p2) = List.find (fun (lid2,_) -> lid1.txt = lid2.txt) ys in
+        is_instance_pattern p1 p2
+      ) xs
+
+let expecting_instance loc =
+  let mess = "an instance of the parent pattern is" in
+  raise Syntaxerr.(Error(Expecting(loc, mess)))
+
+let rec check_instance parent candidat =
+  match (parent.pcopat_desc,candidat.pcopat_desc) with
+  | (Pcopat_hole _, Pcopat_hole _) ->
+     ()
+  | (Pcopat_application (q1,p1), Pcopat_application (q2,p2)) ->
+     if not (is_instance_pattern p1 p2) then
+       expecting_instance candidat.pcopat_loc;
+     check_instance q1 q2
+  | (Pcopat_destructor (q1,d1,_), Pcopat_destructor (q2,d2,_)) ->
+     if not (d1.txt = d2.txt) then
+       expecting_instance candidat.pcopat_loc;
+     check_instance q1 q2
+  | _ ->
+     expecting_instance candidat.pcopat_loc
+
+let truncate_candidat prefix candidat =
+  let lprefix = copattern_length prefix in
+  let lcandidat = copattern_length candidat in
+  let diff = lcandidat - lprefix in
+  let new_candidat = npop_copattern candidat diff in
+  (new_candidat, diff)
+
+let handle ~sugared ty prefix candidat =
+  if sugared then
+    plug_prefix (plug_type_at_level ty 0 prefix) candidat
+  else
+    let (new_candidat,diff) = truncate_candidat prefix candidat in
+    check_instance prefix new_candidat;
+    plug_type_at_level ty diff candidat
+
+let handle_nested_copattern ~sugared ty prefix cocases =
+  check_is_cotype ty;
   List.map (fun cocase ->
-      { cocase with
-        pcc_lhs = plug_prefix new_prefix cocase.pcc_lhs
-      }
+      Exp.cocase (handle ~sugared ty prefix cocase.pcc_lhs) cocase.pcc_rhs
     ) cocases
-
 
 %}
 
@@ -1772,9 +1896,13 @@ comatch_cocase:
   | simple_copattern MINUSGREATER DOT
       { [Exp.cocase $1 (Exp.unreachable ~loc:(rhs_loc 3) ())]}
   | simple_copattern COLON core_type WITH opt_bar nested_comatch_cocases
-      { handle_nested_copattern $1 $3 (List.flatten $6) }
+      { handle_nested_copattern ~sugared:true $3 $1 (List.flatten $6) }
   | simple_copattern COLON core_type WITH BEGIN opt_bar nested_comatch_cocases END
-      { handle_nested_copattern $1 $3 (List.flatten $7) }
+      { handle_nested_copattern ~sugared:true $3 $1 (List.flatten $7) }
+  | simple_copattern COLON core_type WITH opt_bar comatch_cocases
+      { handle_nested_copattern ~sugared:false $3 $1 $6 }
+  | simple_copattern COLON core_type WITH BEGIN opt_bar comatch_cocases END
+      { handle_nested_copattern ~sugared:false $3 $1 $7 }
 ;
 nested_comatch_cocases:
     nested_comatch_cocase                            { [$1] }
@@ -1786,9 +1914,9 @@ nested_comatch_cocase:
   | nested_copattern MINUSGREATER DOT
       { [Exp.cocase $1 (Exp.unreachable ~loc:(rhs_loc 3) ())]}
   | nested_copattern COLON core_type WITH opt_bar nested_comatch_cocases
-      { handle_nested_copattern $1 $3 (List.flatten $6) }
+      { handle_nested_copattern ~sugared:true $3 $1 (List.flatten $6) }
   | nested_copattern COLON core_type WITH BEGIN opt_bar nested_comatch_cocases END
-      { handle_nested_copattern $1 $3 (List.flatten $7) }
+      { handle_nested_copattern ~sugared:true $3 $1 (List.flatten $7) }
 ;
 fun_def:
     MINUSGREATER seq_expr
