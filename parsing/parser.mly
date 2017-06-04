@@ -475,13 +475,6 @@ let check_type_identifier id term = function
   | _ ->
      if id.[0] = '!' then not_expecting term "bang (\"!\")"
 
-(* In the expression "comatch s : ty with .." we expect ty to be
-   either a type constructor whose name starts with a bang, either
-   an arrow type whose rightmost core_type is a type constructor whose name
-   starts with a bang.
-   As well as in nested copattern matching, and indexed colabel declarations.
-*)
-
 let expecting_cotype loc =
   raise Syntaxerr.(Error (Expecting (loc,"cotype")))
 
@@ -492,67 +485,34 @@ let check_constr_is_cotype core_ty = match core_ty.ptyp_desc with
   | _ ->
      expecting_cotype core_ty.ptyp_loc
 
-let rec check_is_cotype core_ty = match core_ty.ptyp_desc with
-    | Ptyp_constr (_,_) ->
-       check_constr_is_cotype core_ty
-    | Ptyp_arrow (_,_,core_ty) ->
-       check_is_cotype core_ty
-    | _ ->
-       expecting_cotype core_ty.ptyp_loc
-
-(* In the expression [comatch s : ty with cocases] we expect all the lhs
-   copatterns in the cocases to start with the identifier s.
-*)
-
-let check_id_in_cocases id_expected cocases =
-  let err loc = raise Syntaxerr.(Error(Expecting(loc,id_expected))) in
-  let rec check_hole_in_copat copat = match copat.pcopat_desc with
-    | Pcopat_hole id ->
-       if not (id_expected = id.txt) then err id.loc
-    | Pcopat_destructor (copat,_,_) | Pcopat_application (copat,_) ->
-       check_hole_in_copat copat
-  in List.iter (fun c -> check_hole_in_copat c.pcc_lhs) cocases
-
 (* Handle nested copattern matching. *)
 
 (* fixme: transfer this part in MNTSA.ml.
    Remark: we have to change the AST in order to handle nested copattern
-   matching in MNTSA.ml
+   matching in MNTSA.ml ...
  *)
 
 (* Tools. *)
 
-let plug_type_at_level ty lvl copattern =
-  let rec aux lvl copattern = match copattern.pcopat_desc with
-    | Pcopat_hole _ ->
-       assert false
-    | Pcopat_destructor (q,d,ty') ->
-       if lvl = 0 then CoPat.destructor ~loc:q.pcopat_loc q d (Some ty)
-       else CoPat.destructor ~loc:copattern.pcopat_loc (aux (pred lvl) q) d ty'
-    | Pcopat_application (q,p) ->
-       if lvl = 0 then assert false
-       else CoPat.application ~loc:copattern.pcopat_loc (aux (pred lvl) q) p
-  in aux lvl copattern
-
 let rec plug_prefix prefix copattern = match copattern.pcopat_desc with
-  | Pcopat_hole _ ->
+  | Pcopat_hole ->
      prefix
   | Pcopat_destructor (q,d,ty) ->
      CoPat.destructor ~loc:copattern.pcopat_loc (plug_prefix prefix q) d ty
-  | Pcopat_application (q,p) ->
-     CoPat.application ~loc:copattern.pcopat_loc (plug_prefix prefix q) p
+  | Pcopat_application (q,p,ty) ->
+     CoPat.application ~loc:copattern.pcopat_loc (plug_prefix prefix q) p ty
 
 let copattern_length q =
   let rec aux acc q = match q.pcopat_desc with
-    | Pcopat_hole _ -> acc
+    | Pcopat_hole -> acc
     | Pcopat_destructor (q,_,_) -> aux (succ acc) q
-    | Pcopat_application (q,_) -> aux (succ acc) q
+    | Pcopat_application (q,_,_) -> aux (succ acc) q
   in aux 1 q
 
 let pop_copattern q = match q.pcopat_desc with
-  | Pcopat_hole _ -> assert false
+  | Pcopat_hole -> assert false
   | Pcopat_destructor (q,_,_) -> q
-  | Pcopat_application (q,_) -> q
+  | Pcopat_application (q,_,_) -> q
 
 let rec npop_copattern q n =
   if n <= 0 then q
@@ -634,9 +594,8 @@ let expecting_instance loc =
 
 let rec check_instance parent candidat =
   match (parent.pcopat_desc,candidat.pcopat_desc) with
-  | (Pcopat_hole _, Pcopat_hole _) ->
-     ()
-  | (Pcopat_application (q1,p1), Pcopat_application (q2,p2)) ->
+  | (Pcopat_hole, Pcopat_hole) -> ()
+  | (Pcopat_application (q1,p1,_), Pcopat_application (q2,p2,_)) ->
      if not (is_instance_pattern p1 p2) then
        expecting_instance candidat.pcopat_loc;
      check_instance q1 q2
@@ -651,22 +610,96 @@ let truncate_candidat prefix candidat =
   let lprefix = copattern_length prefix in
   let lcandidat = copattern_length candidat in
   let diff = lcandidat - lprefix in
-  let new_candidat = npop_copattern candidat diff in
-  (new_candidat, diff)
+  let truncated_candidat = npop_copattern candidat diff in
+  truncated_candidat
 
-let handle ~sugared ty prefix candidat =
-  if sugared then
-    plug_prefix (plug_type_at_level ty 0 prefix) candidat
-  else
-    let (new_candidat,diff) = truncate_candidat prefix candidat in
-    check_instance prefix new_candidat;
-    plug_type_at_level ty diff candidat
-
-let handle_nested_copattern ~sugared ty prefix cocases =
-  check_is_cotype ty;
+let plug_prefix ~sugared prefix cocases =
+  let aux ~sugared prefix candidat =
+    if sugared then plug_prefix prefix candidat
+    else
+      let truncated_candidat = truncate_candidat prefix candidat in
+      check_instance prefix truncated_candidat;
+      candidat
+  in
   List.map (fun cocase ->
-      Exp.cocase (handle ~sugared ty prefix cocase.pcc_lhs) cocase.pcc_rhs
+      { cocase with
+        pcc_lhs = aux ~sugared prefix cocase.pcc_lhs;
+      }
     ) cocases
+
+(* [split_typ τ] returns the arguments and the result type of [τ] in
+   a reversed order such that:
+   split (τ)       = [τ]
+   split (τ₁ → τ₂) = split_typ τ₂ @ [τ₁]
+*)
+
+let split_typ ty =
+  let rec aux acc ty = match ty.ptyp_desc with
+    | Ptyp_constr _ ->
+       ty :: acc
+    | Ptyp_arrow (Nolabel, ty1, ty2) ->
+       aux (ty1 :: acc) ty2
+    | _ -> invalid_arg "split_typ" (* fixme ? *)
+  in aux [] ty
+
+let plug_types_at_level lvl tys copattern =
+  let rec dig lvl copattern =
+    if lvl = 0 then plugs tys copattern
+    else
+      match copattern.pcopat_desc with
+      | Pcopat_hole ->
+         copattern
+      | Pcopat_destructor (q,d,ty') ->
+         CoPat.destructor ~loc:copattern.pcopat_loc (dig (pred lvl) q) d ty'
+      | Pcopat_application (q,p,ty') ->
+         CoPat.application ~loc:copattern.pcopat_loc (dig (pred lvl) q) p ty'
+  (* Should start with a destructor and then only annotated applications. *)
+  and plugs tys copattern = match tys with
+    | [] -> copattern
+    | ty :: tys ->
+       match copattern.pcopat_desc with
+       | Pcopat_hole ->
+          assert false
+       | Pcopat_destructor (q,d,_) ->
+          let new_q = plugs tys q in
+          CoPat.destructor ~loc:q.pcopat_loc new_q d (Some ty)
+       | Pcopat_application (q,p,_) ->
+          let new_q = plugs tys q in
+          CoPat.application ~loc:q.pcopat_loc new_q p (Some ty)
+  in dig lvl copattern
+
+let propagate_typs_with_prefix prefix tys cocases =
+  let aux prefix tys copattern =
+    let lprefix = copattern_length prefix in
+    let lcopattern = copattern_length copattern in
+    let lsuffix = lcopattern - lprefix in
+    let ltys = List.length tys in
+    let start = lsuffix - ltys in
+    plug_types_at_level start tys copattern
+  in
+  List.map (fun cocase ->
+      { cocase with
+        pcc_lhs = aux prefix tys cocase.pcc_lhs;
+      }
+    ) cocases
+
+let propagate_typs_toplevel tys cocases  =
+  let aux tys copattern =
+    let lcopattern = copattern_length copattern in
+    let ltys = List.length tys in
+    let start = lcopattern - succ ltys in
+    plug_types_at_level start tys copattern
+  in
+  List.map (fun cocase ->
+      { cocase with
+        pcc_lhs = aux tys cocase.pcc_lhs;
+      }
+    ) cocases
+
+let plug_and_propagate ~sugared ~typ ~prefix ~cocases =
+  let new_cocases = plug_prefix ~sugared prefix cocases in
+  let splitted_typ = split_typ typ in
+  propagate_typs_with_prefix prefix splitted_typ new_cocases
 
 %}
 
@@ -685,7 +718,8 @@ let handle_nested_copattern ~sugared ty prefix cocases =
 %token BEGIN
 %token <char> CHAR
 %token CLASS
-%token COMATCH
+%token COFUNCTION
+%token COREC
 %token COLON
 %token COLONCOLON
 %token COLONEQUAL
@@ -696,6 +730,7 @@ let handle_nested_copattern ~sugared ty prefix cocases =
 %token DONE
 %token DOT
 %token DOTDOT
+%token DOTDOTDOT
 %token DOWNTO
 %token ELSE
 %token END
@@ -1577,10 +1612,11 @@ expr:
       { mkexp_attrs (Pexp_open($3, mkrhs $5 5, $7)) $4 }
   | FUNCTION ext_attributes opt_bar match_cases
       { mkexp_attrs (Pexp_function(List.rev $4)) $2 }
-  | lazy_modifier COMATCH val_ident COLON core_type WITH opt_bar comatch_cocases
-      { check_is_cotype $5;
-        check_id_in_cocases $3 $8;
-        mkexp(Pexp_comatch ($1,mkrhs $3 2,$5,List.rev $8))
+  | lazy_modifier COFUNCTION COLON core_type WITH opt_bar comatch_cocases
+      { let tys = split_typ $4 in
+        let cocases = List.rev $7 in
+        let new_cocases = propagate_typs_toplevel tys cocases in
+        mkexp(Pexp_cofunction ($1, $4, new_cocases))
       }
   | FUN ext_attributes labeled_simple_pattern fun_def
       { let (l,o,p) = $3 in
@@ -1855,6 +1891,28 @@ let_binding:
     LET ext_attributes rec_flag let_binding_body post_item_attributes
       { let (ext, attr) = $2 in
         mklbs ext $3 (mklb true $4 (attr@$5)) }
+  | LET COREC lazy_modifier val_ident COLON TYPE lident_list DOT core_type WITH opt_bar comatch_cocases
+      {
+        let tys = split_typ $9 in
+        let cocases = List.rev $12 in
+        let new_cocases = propagate_typs_toplevel tys cocases in
+        let cofun = Exp.cofunction_ $3 $9 new_cocases in
+        let exp, poly = wrap_type_annotation $7 $9 cofun in
+        let lb =
+          mklb false (ghpat(Ppat_constraint(mkpatvar $4 4, poly)), exp) []
+        in
+        mklbs None Recursive lb
+      }
+  | LET COREC lazy_modifier val_ident COLON core_type WITH opt_bar comatch_cocases
+       { let tys = split_typ $6 in
+         let cocases = List.rev $9 in
+         let new_cocases = propagate_typs_toplevel tys cocases in
+         let cofun = Exp.cofunction_ $3 $6 new_cocases in
+         let lb =
+           mklb false (ghpat(Ppat_constraint (mkpatvar $4 4, $6)), cofun) []
+         in
+         mklbs None Recursive lb
+       }
 ;
 and_let_binding:
     AND attributes let_binding_body post_item_attributes
@@ -1896,17 +1954,18 @@ comatch_cocase:
   | simple_copattern MINUSGREATER DOT
       { [Exp.cocase $1 (Exp.unreachable ~loc:(rhs_loc 3) ())]}
   | simple_copattern COLON core_type WITH opt_bar nested_comatch_cocases
-      { handle_nested_copattern ~sugared:true $3 $1 (List.flatten $6) }
+      { plug_and_propagate ~sugared:true ~typ:$3 ~prefix:$1 ~cocases:$6 }
   | simple_copattern COLON core_type WITH BEGIN opt_bar nested_comatch_cocases END
-      { handle_nested_copattern ~sugared:true $3 $1 (List.flatten $7) }
+      { plug_and_propagate ~sugared:true ~typ:$3 ~prefix:$1 ~cocases:$7 }
   | simple_copattern COLON core_type WITH opt_bar comatch_cocases
-      { handle_nested_copattern ~sugared:false $3 $1 $6 }
+      { plug_and_propagate ~sugared:false ~typ:$3 ~prefix:$1 ~cocases:$6 }
   | simple_copattern COLON core_type WITH BEGIN opt_bar comatch_cocases END
-      { handle_nested_copattern ~sugared:false $3 $1 $7 }
+      { plug_and_propagate ~sugared:false ~typ:$3 ~prefix:$1 ~cocases:$7 }
+
 ;
 nested_comatch_cocases:
-    nested_comatch_cocase                            { [$1] }
-  | nested_comatch_cocases BAR nested_comatch_cocase { $3 :: $1 }
+    nested_comatch_cocase                            { $1 }
+  | nested_comatch_cocases BAR nested_comatch_cocase { $3 @ $1 }
 ;
 nested_comatch_cocase:
     nested_copattern MINUSGREATER seq_expr
@@ -1914,9 +1973,9 @@ nested_comatch_cocase:
   | nested_copattern MINUSGREATER DOT
       { [Exp.cocase $1 (Exp.unreachable ~loc:(rhs_loc 3) ())]}
   | nested_copattern COLON core_type WITH opt_bar nested_comatch_cocases
-      { handle_nested_copattern ~sugared:true $3 $1 (List.flatten $6) }
+      { plug_and_propagate ~sugared:true ~typ:$3 ~prefix:$1 ~cocases:$6 }
   | nested_copattern COLON core_type WITH BEGIN opt_bar nested_comatch_cocases END
-      { handle_nested_copattern ~sugared:true $3 $1 (List.flatten $7) }
+      { plug_and_propagate ~sugared:true ~typ:$3 ~prefix:$1 ~cocases:$7 }
 ;
 fun_def:
     MINUSGREATER seq_expr
@@ -1982,20 +2041,61 @@ lazy_modifier:
   LAZY { true }
 | /* empty */ { false }
 ;
-/* For the moment, we only accept simple copattern (destructors). */
-simple_copattern:
-  | LIDENT
-      { mkcopat(Pcopat_hole (mkrhs $1 1)) }
-  | simple_copattern HASH UIDENT
-      { mkcopat(Pcopat_destructor ($1,mkrhs $3 3,None)) }
+simple_copattern0:
+  | DOTDOT
+      { mkcopat(Pcopat_hole) }
+  | LPAREN simple_copattern RPAREN
+      { $2 }
+  | simple_copattern0 HASH UIDENT
+      { mkcopat(Pcopat_destructor ($1,mkrhs $3 3, None)) }
 ;
-nested_copattern:
-  | DOTDOT HASH UIDENT
-      { let q = mkcopat(Pcopat_hole (mknoloc "..")) in
+simple_copattern:
+  | simple_copattern0
+      { $1 }
+  | simple_copattern simple_pattern_copattern
+      { mkcopat(Pcopat_application ($1,$2, None)) }
+;
+nested_copattern0:
+  | DOTDOTDOT HASH UIDENT
+      { let q = mkcopat(Pcopat_hole) in
         mkcopat(Pcopat_destructor (q, mkrhs $3 3, None))
       }
-  | nested_copattern HASH UIDENT
+  | LPAREN nested_copattern RPAREN
+      { $2 }
+  | nested_copattern0 HASH UIDENT
       { mkcopat(Pcopat_destructor ($1, mkrhs $3 3, None)) }
+;
+nested_copattern:
+  | nested_copattern0
+      { $1 }
+  | nested_copattern simple_pattern_copattern
+      { mkcopat(Pcopat_application ($1, $2, None)) }
+;
+simple_pattern_copattern:
+  | val_ident %prec below_EQUAL
+      { mkpat(Ppat_var (mkrhs $1 1)) }
+  | constr_longident
+      { mkpat(Ppat_construct(mkrhs $1 1, None)) }
+  | LPAREN pattern_copattern RPAREN
+      { $2 }
+;
+pattern_copattern:
+  | simple_pattern_copattern
+      { $1 }
+  | constr_longident pattern_copattern %prec prec_constr_appl
+      { mkpat(Ppat_construct(mkrhs $1 1, Some $2)) }
+  | pattern_copattern_comma_list %prec below_COMMA
+      { mkpat(Ppat_tuple(List.rev $1)) }
+  | pattern_copattern COLONCOLON pattern_copattern
+      { mkpat_cons (rhs_loc 2) (ghpat(Ppat_tuple[$1;$3])) (symbol_rloc()) }
+;
+pattern_copattern_comma_list:
+  | pattern_copattern_comma_list COMMA pattern_copattern
+      { $3 :: $1 }
+  | pattern_copattern COMMA pattern_copattern
+      { [$3; $1] }
+  | pattern_copattern COMMA error
+      { expecting 3 "pattern" }
 ;
 pattern:
   | pattern AS val_ident

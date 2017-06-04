@@ -107,8 +107,9 @@ module Pat:
 module CoPat :
   sig
     val mk: ?loc:Location.t -> copattern_desc -> copattern
-    val hole: ?loc:Location.t -> str -> copattern
-    val application: ?loc:Location.t -> copattern -> pattern -> copattern
+    val hole: ?loc:Location.t -> unit -> copattern
+    val application: ?loc:Location.t -> copattern -> pattern ->
+      core_type option -> copattern
     val destructor: ?loc:Location.t -> copattern -> str -> core_type option -> copattern
   end
 
@@ -125,6 +126,8 @@ module Exp:
     val fun_: ?loc:loc -> ?attrs:attrs -> arg_label -> expression option
               -> pattern -> expression -> expression
     val function_: ?loc:loc -> ?attrs:attrs -> case list -> expression
+    val cofunction_ : ?loc:Location.t -> ?attrs:attributes -> bool
+      -> core_type -> cocase list -> expression
     val apply: ?loc:loc -> ?attrs:attrs -> expression
                -> (arg_label * expression) list -> expression
     val match_: ?loc:loc -> ?attrs:attrs -> expression -> case list

@@ -236,9 +236,9 @@ module S = struct
     }
 
   and copattern_desc =
-    | Pcopat_hole of string loc
+    | Pcopat_hole
     (* f *)
-    | Pcopat_application of copattern * pattern
+    | Pcopat_application of copattern * pattern * core_type option
     (* q p *)
     | Pcopat_destructor  of copattern * string loc * core_type option
     (* q.d *)
@@ -267,8 +267,8 @@ module S = struct
     | Pexp_function of case list
     (* function P1 -> E1 | ... | Pn -> En *)
 
-    | Pexp_comatch of bool string loc * core_type * cocase list
-    (* [lazy] comatch x : T with Q1 -> E1 | ... | Qn -> En *)
+    | Pexp_cofunction of bool * core_type * cocase list
+    (* [lazy] cofunction : T with Q1 -> E1 | ... | Qn -> En *)
 
     | Pexp_cofield of expression * Longident.t loc
     (* E#Q *)

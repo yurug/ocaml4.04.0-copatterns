@@ -94,8 +94,8 @@ end
 
 module CoPat = struct
   let mk ?(loc = !default_loc) d = {pcopat_desc = d; pcopat_loc = loc}
-  let hole ?loc name = mk ?loc (Pcopat_hole name)
-  let application ?loc q p = mk ?loc (Pcopat_application (q,p))
+  let hole ?loc () = mk ?loc Pcopat_hole
+  let application ?loc q p ty = mk ?loc (Pcopat_application (q,p,ty))
   let destructor ?loc q d ty = mk ?loc (Pcopat_destructor (q,d,ty))
 end
 
@@ -110,6 +110,7 @@ module Exp = struct
   let let_ ?loc ?attrs a b c = mk ?loc ?attrs (Pexp_let (a, b, c))
   let fun_ ?loc ?attrs a b c d = mk ?loc ?attrs (Pexp_fun (a, b, c, d))
   let function_ ?loc ?attrs a = mk ?loc ?attrs (Pexp_function a)
+  let cofunction_ ?loc ?attrs a b c = mk ?loc ?attrs (Pexp_cofunction (a,b,c))
   let apply ?loc ?attrs a b = mk ?loc ?attrs (Pexp_apply (a, b))
   let match_ ?loc ?attrs a b = mk ?loc ?attrs (Pexp_match (a, b))
   let try_ ?loc ?attrs a b = mk ?loc ?attrs (Pexp_try (a, b))
@@ -142,7 +143,6 @@ module Exp = struct
   let open_ ?loc ?attrs a b c = mk ?loc ?attrs (Pexp_open (a, b, c))
   let extension ?loc ?attrs a = mk ?loc ?attrs (Pexp_extension a)
   let unreachable ?loc ?attrs () = mk ?loc ?attrs Pexp_unreachable
-
   let case lhs ?guard rhs =
     {
      pc_lhs = lhs;

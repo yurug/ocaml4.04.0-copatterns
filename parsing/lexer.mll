@@ -42,8 +42,9 @@ let keyword_table =
     "assert", ASSERT;
     "begin", BEGIN;
     "class", CLASS;
-    "comatch", COMATCH;
+    "cofunction", COFUNCTION;
     "constraint", CONSTRAINT;
+    "corec", COREC;
     "do", DO;
     "done", DONE;
     "downto", DOWNTO;
@@ -464,6 +465,7 @@ rule token = parse
   | "->" { MINUSGREATER }
   | "."  { DOT }
   | ".." { DOTDOT }
+  | "..." { DOTDOTDOT }
   | ":"  { COLON }
   | "::" { COLONCOLON }
   | ":=" { COLONEQUAL }
