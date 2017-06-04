@@ -1,16 +1,16 @@
-(* Borrowed from Data.Stream Haskell package. *)
-(* https://hackage.haskell.org/package/Stream-0.4.7.2/docs/Data-Stream.html *)
+(* (\* Borrowed from Data.Stream Haskell package. *\) *)
+(* (\* https://hackage.haskell.org/package/Stream-0.4.7.2/docs/Data-Stream.html *\) *)
 
-(** The type of streams. *)
+(* (\** The type of streams. *\) *)
 
 type 'a !stream = {
   Head : 'a;
   Tail : 'a !stream;
 }
 
-(** A delay type.
-    Since we are working in CBV programming language, it is sometimes necessary
-    to delay the arguments. *)
+(* (\** A delay type. *)
+(*     Since we are working in CBV programming language, it is sometimes necessary *)
+(*     to delay the arguments. *\) *)
 
 type 'a !delay = { Force : 'a }
 
@@ -19,389 +19,389 @@ type 'a !delay = { Force : 'a }
 (* [map f s] applies f over all elements of s. *)
 
 let rec map : type a b. (a -> b) -> a !stream -> b !stream =
-  fun f s -> comatch r : b !stream with
-    | r#Head -> f s#Head
-    | r#Tail -> map f s#Tail
+  fun f s -> cofunction : b !stream with
+    | ..#Head -> f s#Head
+    | ..#Tail -> map f s#Tail
 
-(* [inits s] returns all the finite prefixes of s. *)
+(* (\* [inits s] returns all the finite prefixes of s. *\) *)
 
 let rec inits : type a. a !stream -> (a list) !stream =
-  fun s -> comatch r : (a list) !stream with
-    | r#Head -> []
-    | r#Tail -> map (fun xs -> s#Head :: xs) (inits s#Tail)
+  fun s -> cofunction : (a list) !stream with
+    | ..#Head -> []
+    | ..#Tail -> map (fun xs -> s#Head :: xs) (inits s#Tail)
 
-(* [tails s] returns all the suffixes of s. *)
+(* (\* [tails s] returns all the suffixes of s. *\) *)
 
 let rec tails : type a. a !stream -> (a !stream) !stream =
-  fun s -> comatch r : (a !stream) !stream with
-    | r#Head -> s
-    | r#Tail -> tails s#Tail
+  fun s -> cofunction : (a !stream) !stream with
+    | ..#Head -> s
+    | ..#Tail -> tails s#Tail
 
-(* [intersperse x s] creates an alternating stream of elements from s and x.
-   Note the nested copattern and the type annotation. *)
+(* (\* [intersperse x s] creates an alternating stream of elements from s and x. *)
+(*    Note the nested copattern and the type annotation. *\) *)
 
-let rec intersperse : type a. a -> a !stream -> a !stream =
-  fun x s -> comatch r : a !stream with
-   | r#Head -> s#Head
-   | r#Tail : a !stream with
-   | ..#Head -> x
-   | ..#Tail -> intersperse x s#Tail
+(* let rec intersperse : type a. a -> a !stream -> a !stream = *)
+(*   fun x s -> cofunction : a !stream with *)
+(*    | ..#Head -> s#Head *)
+(*    | ..#Tail : a !stream with *)
+(*    | ...#Head -> x *)
+(*    | ...#Tail -> intersperse x s#Tail *)
 
-(* [interleave s1 s2] alternates elements from each list. *)
+(* (\* [interleave s1 s2] alternates elements from each list. *\) *)
 
 let rec interleave : type a. a !stream -> a !stream -> a !stream =
-  fun s1 s2 -> comatch s : a !stream with
-   | s#Head -> s1#Head
-   | s#Tail -> interleave s2#Tail s1#Tail
+  fun s1 s2 -> cofunction : a !stream with
+   | ..#Head -> s1#Head
+   | ..#Tail -> interleave s2#Tail s1#Tail
 
-(* [scan f z s] yields a stream of successive reduced values from:
-   scan f z [x1, x2, ...] == [z, z `f` x1, (z `f` x1) `f` x2, ...] *)
+(* (\* [scan f z s] yields a stream of successive reduced values from: *)
+(*    scan f z [x1, x2, ...] == [z, z `f` x1, (z `f` x1) `f` x2, ...] *\) *)
 
-let rec scan : type a b. (a -> b -> a) -> a -> b !stream -> a !stream =
-  fun f z s -> comatch r : a !stream with
-   | r#Head -> z
-   | r#Tail -> scan f (f z s#Head) s#Tail
+(* let rec scan : type a b. (a -> b -> a) -> a -> b !stream -> a !stream = *)
+(*   fun f z s -> cofunction : a !stream with *)
+(*    | ..#Head -> z *)
+(*    | ..#Tail -> scan f (f z s#Head) s#Tail *)
 
-(* scan' is a strict scan. *)
+(* (\* scan' is a strict scan. *\) *)
 
-let rec scan' : type a b. (a -> b -> a) -> a -> b !stream -> a !stream =
-  fun f z s ->
-    let x = f z s#Head in
-    comatch r : a !stream with
-     | r#Head -> x
-     | r#Tail -> scan' f x s#Tail
+(* let rec scan' : type a b. (a -> b -> a) -> a -> b !stream -> a !stream = *)
+(*   fun f z s -> *)
+(*     let x = f z s#Head in *)
+(*     cofunction : a !stream with *)
+(*      | ..#Head -> x *)
+(*      | ..#Tail -> scan' f x s#Tail *)
 
-(* [scan1 f s] is a variant of scan that has no starting value argument:
-   scan1 f [x1, x2, ...] == [x1, x1 `f` x2, ...] *)
+(* (\* [scan1 f s] is a variant of scan that has no starting value argument: *)
+(*    scan1 f [x1, x2, ...] == [x1, x1 `f` x2, ...] *\) *)
 
-let scan1 f s = scan f s#Head s#Tail
+(* let scan1 f s = scan f s#Head s#Tail *)
 
-(* scan1' is a strict scan that has no starting value. *)
+(* (\* scan1' is a strict scan that has no starting value. *\) *)
 
-let scan1' f s = scan' f s#Head s#Tail
+(* let scan1' f s = scan' f s#Head s#Tail *)
 
-(* The function [transpose] computes the transposition of a stream of streams. *)
+(* (\* The function [transpose] computes the transposition of a stream of streams. *\) *)
 
 let rec transpose : type a. (a !stream) !stream -> (a !stream) !stream =
-  fun s -> comatch r : (a !stream) !stream with
-   | r#Head : a !stream with begin
-     | ..#Head -> s#Head#Head
-     | ..#Tail -> map head s#Tail
+  fun s -> cofunction : (a !stream) !stream with
+   | ..#Head : a !stream with begin
+     | ...#Head -> s#Head#Head
+     | ...#Tail -> map head s#Tail
    end
-   | r#Tail -> transpose @@ comatch t : (a !stream) !stream with
-     | t#Head -> s#Head#Tail
-     | t#Tail -> s#Tail
+   | ..#Tail -> transpose @@ cofunction : (a !stream) !stream with
+     | ..#Head -> s#Head#Tail
+     | ..#Tail -> s#Tail
 
-(** Building streams *)
+(* (\** Building streams *\) *)
 
-(* [iterate f x] produces the infinite sequence of repeated
-   applications of f to x. *)
+(* (\* [iterate f x] produces the infinite sequence of repeated *)
+(*    applications of f to x. *\) *)
 
-let rec iterate : type a. (a -> a) -> a -> a !stream =
-  fun f x -> comatch s : a !stream with
-   | s#Head -> x
-   | s#Tail -> iterate f (f x)
+(* let rec iterate : type a. (a -> a) -> a -> a !stream = *)
+(*   fun f x -> cofunction : a !stream with *)
+(*    | ..#Head -> x *)
+(*    | ..#Tail -> iterate f (f x) *)
 
-(* [from n] returns a sequence starting at n. *)
+(* (\* [from n] returns a sequence starting at n. *\) *)
 
-let from n = iterate succ n
+(* let from n = iterate succ n *)
 
-(* [repeat x] returns a constant stream [x,x,x,..] *)
+(* (\* [repeat x] returns a constant stream [x,x,x,..] *\) *)
 
-let repeat : type a. a -> a !stream =
-  fun x -> comatch s : a !stream with
-   | s#Head -> x
-   | s#Tail -> s
+(* let rec repeat : type a. a -> a !stream = *)
+(*   fun x -> cofunction : a !stream with *)
+(*    | ..#Head -> x *)
+(*    | ..#Tail -> repeat x *)
 
-(* [unfold f c] is similar to the unfold for lists. *)
+(* (\* [unfold f c] is similar to the unfold for lists. *\) *)
 
-let rec unfold : type a c. (c -> (a * c)) -> c -> a !stream =
-  fun f c ->
-    let (x,d) = f c in
-    comatch s : a !stream with
-      | s#Head -> x
-      | s#Tail -> unfold f d
-
-(* [prefix xs s] function adds xs as a prefix to s. *)
+(* let rec unfold : type a c. (c -> (a * c)) -> c -> a !stream = *)
+(*   fun f c -> *)
+(*     let (x,d) = f c in *)
+(*     cofunction : a !stream with *)
+(*       | ..#Head -> x *)
+(*       | ..#Tail -> unfold f d *)
+
+(* (\* [prefix xs s] function adds xs as a prefix to s. *\) *)
 
-let prefix : type a. a list -> a !stream -> a !stream =
-  fun xs s ->
-    let rec aux (xs : a list) = match xs with
-      | [] -> s
-      | x::xs -> comatch r : a !stream with
-        | r#Head -> x
-        | r#Tail -> aux xs
-    in aux xs
+(* let prefix : type a. a list -> a !stream -> a !stream = *)
+(*   fun xs s -> *)
+(*     let rec aux (xs : a list) = match xs with *)
+(*       | [] -> s *)
+(*       | x :: xs -> cofunction : a !stream with *)
+(*         | ..#Head -> x *)
+(*         | ..#Tail -> aux xs *)
+(*     in aux xs *)
 
-(* [prefix_apply xs f b] adds xs as a prefix to the stream generated by the
-   application of f to b. *)
-
-let prefix_apply : type a b. a list -> (b -> a !stream) -> b -> a !stream =
-  fun xs f b ->
-    let rec aux (xs : a list) = match xs with
-      | [] -> f b
-      | x::xs -> comatch r : a !stream with
-        | r#Head -> x
-        | r#Tail -> aux xs
-    in aux xs
-
-(* [delayed_prefix] specifies prefix_apply for delayed streams. *)
-
-let delayed_prefix xs d = prefix_apply xs force d
-
-(* [cycle xs] returns the infinite repetition of xs. *)
-
-let rec cycle : type a. a list -> a !stream =
-  fun xs ->
-    let acc = comatch d : (a !stream) !delay with
-      | d#Force -> cycle xs
-    in delayed_prefix xs acc
-
-(** Extracting sublists *)
-
-(* [take n s] returns the first n elements of s. *)
+(* (\* [prefix_apply xs f b] adds xs as a prefix to the stream generated by the *)
+(*    application of f to b. *\) *)
+
+(* let prefix_apply : type a b. a list -> (b -> a !stream) -> b -> a !stream = *)
+(*   fun xs f b -> *)
+(*     let rec aux (xs : a list) = match xs with *)
+(*       | [] -> f b *)
+(*       | x::xs -> cofunction : a !stream with *)
+(*         | ..#Head -> x *)
+(*         | ..#Tail -> aux xs *)
+(*     in aux xs *)
+
+(* (\* [delayed_prefix] specifies prefix_apply for delayed streams. *\) *)
+
+(* let delayed_prefix xs d = prefix_apply xs force d *)
+
+(* (\* [cycle xs] returns the infinite repetition of xs. *\) *)
+
+(* let rec cycle : type a. a list -> a !stream = *)
+(*   fun xs -> *)
+(*     let acc = cofunction : (a !stream) !delay with *)
+(*       | ..#Force -> cycle xs *)
+(*     in delayed_prefix xs acc *)
+
+(* (\** Extracting sublists *\) *)
+
+(* (\* [take n s] returns the first n elements of s. *\) *)
 
-let rec take n s =
-  if n <= 0 then []
-  else s#Head :: take (pred n) s#Tail
+(* let rec take n s = *)
+(*   if n <= 0 then [] *)
+(*   else s#Head :: take (pred n) s#Tail *)
 
-(* [drop n s] drops the first n elements off the front of the sequence s. *)
-
-let rec drop n s =
-  if n <= 0 then s
-  else drop (pred n) s#Tail
-
-(* [split_at n s] returns a pair consisting of the prefix of s of length n
-   and the remaining stream immediately following this prefix. *)
-
-let split_at n s =
-  let rec aux acc n s =
-    if n <= 0 then (List.rev acc,s)
-    else aux (s#Head :: acc) (pred n) s#Tail
-  in aux [] n
-
-(* [take_while p s] returns the longest prefix of the stream s for which
-   the predicate p holds. *)
-
-let take_while p s =
-  let rec aux acc s =
-    if not (p s#Head) then List.rev acc
-    else aux (s#Head :: acc) s#Tail
-  in aux [] s
-
-(* [drop_while p s] returns the suffix remaining after takeWhile p x.
-   Beware: this function may diverge if every element of x satisfies p,
-   e.g. dropWhile even (repeat 0) will loop. *)
-
-let drop_while p s =
-  let rec aux s =
-    if not (p s#Head) then s
-    else aux s#Tail
-  in aux s
-
-(* [fold_while p f s] folds the stream with f until the predicate p is false
-   on the head of s. Similary to scan1, it has no starting value argument. *)
-
-let fold_while : type a. (a -> bool) -> (a -> a -> a) -> a !stream -> a =
-  fun p f s ->
-    let rec aux : a !stream -> a -> a = fun s acc ->
-      let x = s#Head in
-      if p x then aux s#Tail (f x acc)
-      else acc
-    in aux s#Tail s#Head
-
-(* [span p s] returns the longest prefix of s that satisfies p, together with
-   the remainder of the stream. Beware: this function may diverge if
-   every element of s satisfies p, e.g. span even (repeat 0) will loop. *)
-
-let span p s =
-  let rec aux acc s =
-    if not (p s#Head) then (List.rev acc,s)
-    else aux (s#Head :: acc) s#Tail
-  in aux [] s
-
-(* [break p s] function is equivalent to [span (\x -> not (p x)) s]
-   Beware: this function may diverge for the same reason as span. *)
-
-let break p s = span (fun x -> not (p x)) s
-
-(* [filter p s] removes any elements from s that do not satisfy p.
-   Beware: this function may diverge if there is no element of s that
-   satisfies p, e.g. filter odd (repeat 0) will loop. *)
-
-let rec filter : type a. (a -> bool) -> a !stream -> a !stream =
-  fun p s ->
-    let x = s#Head in
-    if p x then comatch r : a !stream with
-       | r#Head -> x
-       | r#Tail -> filter p s#Tail
-    else filter p s#Tail
-
-(* [group s] returns a stream of lists such that flattening the resulting
-   stream is equal to the s. Moreover, each sublist in the resulting stream
-   contains only equal elements. *)
+(* (\* [drop n s] drops the first n elements off the front of the sequence s. *\) *)
+
+(* let rec drop n s = *)
+(*   if n <= 0 then s *)
+(*   else drop (pred n) s#Tail *)
+
+(* (\* [split_at n s] returns a pair consisting of the prefix of s of length n *)
+(*    and the remaining stream immediately following this prefix. *\) *)
+
+(* let split_at n s = *)
+(*   let rec aux acc n s = *)
+(*     if n <= 0 then (List.rev acc,s) *)
+(*     else aux (s#Head :: acc) (pred n) s#Tail *)
+(*   in aux [] n *)
+
+(* (\* [take_while p s] returns the longest prefix of the stream s for which *)
+(*    the predicate p holds. *\) *)
+
+(* let take_while p s = *)
+(*   let rec aux acc s = *)
+(*     if not (p s#Head) then List.rev acc *)
+(*     else aux (s#Head :: acc) s#Tail *)
+(*   in aux [] s *)
+
+(* (\* [drop_while p s] returns the suffix remaining after takeWhile p x. *)
+(*    Beware: this function may diverge if every element of x satisfies p, *)
+(*    e.g. dropWhile even (repeat 0) will loop. *\) *)
+
+(* let drop_while p s = *)
+(*   let rec aux s = *)
+(*     if not (p s#Head) then s *)
+(*     else aux s#Tail *)
+(*   in aux s *)
+
+(* (\* [fold_while p f s] folds the stream with f until the predicate p is false *)
+(*    on the head of s. Similary to scan1, it has no starting value argument. *\) *)
+
+(* let fold_while : type a. (a -> bool) -> (a -> a -> a) -> a !stream -> a = *)
+(*   fun p f s -> *)
+(*     let rec aux : a !stream -> a -> a = fun s acc -> *)
+(*       let x = s#Head in *)
+(*       if p x then aux s#Tail (f x acc) *)
+(*       else acc *)
+(*     in aux s#Tail s#Head *)
+
+(* (\* [span p s] returns the longest prefix of s that satisfies p, together with *)
+(*    the remainder of the stream. Beware: this function may diverge if *)
+(*    every element of s satisfies p, e.g. span even (repeat 0) will loop. *\) *)
+
+(* let span p s = *)
+(*   let rec aux acc s = *)
+(*     if not (p s#Head) then (List.rev acc,s) *)
+(*     else aux (s#Head :: acc) s#Tail *)
+(*   in aux [] s *)
+
+(* (\* [break p s] function is equivalent to [span (\x -> not (p x)) s] *)
+(*    Beware: this function may diverge for the same reason as span. *\) *)
+
+(* let break p s = span (fun x -> not (p x)) s *)
+
+(* (\* [filter p s] removes any elements from s that do not satisfy p. *)
+(*    Beware: this function may diverge if there is no element of s that *)
+(*    satisfies p, e.g. filter odd (repeat 0) will loop. *\) *)
+
+(* let rec filter : type a. (a -> bool) -> a !stream -> a !stream = *)
+(*   fun p s -> *)
+(*     let x = s#Head in *)
+(*     if p x then cofunction : a !stream with *)
+(*        | ..#Head -> x *)
+(*        | ..#Tail -> filter p s#Tail *)
+(*     else filter p s#Tail *)
+
+(* (\* [group s] returns a stream of lists such that flattening the resulting *)
+(*    stream is equal to the s. Moreover, each sublist in the resulting stream *)
+(*    contains only equal elements. *\) *)
 
-let rec group : type a. a !stream -> (a list) !stream =
-  fun s ->
-    let (xs,rest) = span (fun x -> x = s#Head) s in
-    comatch r : (a list) !stream with
-     | r#Head -> xs
-     | r#Tail -> group rest
-
-(** Sublist predicates *)
-
-(* [is_prefix xs s] returns true if xs is a prefix of s. *)
-
-let rec is_prefix_of : type a. a list -> a !stream -> bool =
-  fun xs s ->
-    match xs with
-    | [] -> true
-    | x::xs -> x = s#Head && is_prefix_of xs s#Tail
-
-(** Indexing streams *)
-
-(* [get n s] returns the element of the stream s at index n.
-   Note that the head of the stream has index 0. *)
-
-let rec get n s =
-  if n < 0 then
-    raise (Invalid_argument "Qstream.get")
-  else
-    let rec loop n s =
-      if n = 0 then s#Head
-      else loop (pred n) s#Tail
-    in loop n s
-
-(* [find_index p s] returns the index of the first element in the stream that
-   satisfies p. Beware: find_index p s will diverge if none of the elements of
-   s satisfy p. *)
-
-let find_index p s =
-  let rec aux s n =
-    if p s#Head then n
-    else aux s#Tail (succ n)
-  in aux s 0
-
-(* [find_indices p s] extends find_index by returning the
-   indices of all elements of s satisfying p, in ascending order. *)
-
-let find_indices : type a. (a -> bool) -> a !stream -> int !stream =
-  fun p s ->
-    let rec aux (n : int) s : int !stream =
-      if p s#Head then comatch r : int !stream with
-        | r#Head -> n
-        | r#Tail -> aux (succ n) s#Tail
-      else aux (succ n) s#Tail
-    in aux 0 s
-
-(* [elem_index x s] returns the index of the first element in s which is equal
-   to x.
-   Beware: elem_index x s will diverge if none of the elements of s equal x. *)
-
-let elem_index x s = find_index (fun y -> x = y)
-
-(* [elemIndices x s] function extends elem_index, by returning the indices of
-   all elements equal to the query element, in ascending order.
-   Beware: elemIndices x s will diverge if any suffix of s does not
-   contain x. *)
-
-let elem_indices x s = find_indices (fun y -> x = y)
-
-(** Zipping and unzipping streams *)
-
-(* [zip_with f s1 s2] generalizes zip. Rather than tupling the functions,
-   the elements are combined using the function passed as the first argument
-   to zip_with. *)
-
-let rec zip_with : type a b c.
-  (a -> b -> c) -> a !stream -> b !stream -> c !stream =
-  fun f s1 s2 -> comatch s : c !stream with
-   | s#Head -> f s1#Head s2#Head
-   | s#Tail -> zip_with f s1#Tail s2#Tail
-
-(* [zip s1 s2] returns the stream of pairs obtained by pairing elements at
-   the same position in s1 and s2. *)
-
-let zip s1 s2 = zip_with (fun a b -> (a,b)) s1 s2
-
-(* The unzip function is the inverse of the zip function. *)
-
-let unzip s = (map fst s, map snd s)
-
-(** Functions on streams of characters *)
-
-(* [implode cs] takes a list of char and returns the corresponding string. *)
-
-let implode cs =
-  let res = Bytes.create (List.length cs) in
-  List.iteri (Bytes.set res) cs;
-  res
-
-(* [explode s] takes a string and returns the corresponding list of char. *)
-
-let explode s =
-  let rec aux n acc =
-    if n < 0 then acc
-    else aux (pred n) (s.[n] :: acc)
-  in aux (String.length s - 1) []
-
-(* [words s] breaks s into a stream of words, which were delimited by
-   white space.
-   Beware: if the stream of characters s does not contain white space,
-   accessing the tail of words s will loop. *)
-
-let rec words s : string !stream =
-  let (hd,tl) = break (fun c -> c = ' ') s in
-  comatch r : string !stream with
-    | r#Head -> implode hd
-    | r#Tail -> words tl
-
-(* [unwords s] function is an inverse operation to words.
-   It joins words with separating spaces. *)
-
-let rec unwords s : char !stream =
-  let acc = comatch d : (char !stream) !delay with
-   | d#Force : char !stream with
-     | ..#Head  -> ' '
-     | ..#Tail -> unwords s#Tail
-  in delayed_prefix (explode s#Head) acc
-
-(* [lines s] function breaks a stream of characters into a list of strings
-   at newline characters. The resulting strings do not contain newlines.
-   Beware: if the stream of characters s does not contain newline characters,
-   accessing the tail of lines s will loop. *)
-
-let rec lines s : string !stream =
-  let (x,t) = break (fun c -> c = '\n') s in
-  comatch r : string !stream with
-    | r#Head -> implode x
-    | r#Tail -> lines t
-
-(* [unlines s] is an inverse operation to lines. It joins lines, after
-   appending a terminating newline to each. *)
-
-let rec unlines s : char !stream =
-  let acc = comatch d : (char !stream) !delay with
-   | d#Force : char !stream with
-     | ..#Head  -> '\n'
-     | ..#Tail -> unlines s#Tail
-  in delayed_prefix (explode s#Head) acc
-
-(* The Stream Monad *)
-
-module type MONAD = sig
-  type 'a t
-  val return : 'a -> 'a t
-  val ( >>= ) : 'a t -> ('a -> 'b t) -> 'b t
-end
-
-let rec join : type a. (a !stream) !stream -> a !stream =
-  fun s -> comatch r : a !stream with
-   | r#Head -> s#Head#Head
-   | r#Tail -> join (map tail s#Tail)
-
-module Monad : MONAD with type 'a t = 'a !stream = struct
-  type 'a t = 'a !stream
-  let return = repeat
-  let ( >>= ) m f = join (map f m)
-end
+(* let rec group : type a. a !stream -> (a list) !stream = *)
+(*   fun s -> *)
+(*     let (xs,rest) = span (fun x -> x = s#Head) s in *)
+(*     cofunction : (a list) !stream with *)
+(*      | ..#Head -> xs *)
+(*      | ..#Tail -> group rest *)
+
+(* (\** Sublist predicates *\) *)
+
+(* (\* [is_prefix xs s] returns true if xs is a prefix of s. *\) *)
+
+(* let rec is_prefix_of : type a. a list -> a !stream -> bool = *)
+(*   fun xs s -> *)
+(*     match xs with *)
+(*     | [] -> true *)
+(*     | x::xs -> x = s#Head && is_prefix_of xs s#Tail *)
+
+(* (\** Indexing streams *\) *)
+
+(* (\* [get n s] returns the element of the stream s at index n. *)
+(*    Note that the head of the stream has index 0. *\) *)
+
+(* let rec get n s = *)
+(*   if n < 0 then *)
+(*     raise (Invalid_argument "Qstream.get") *)
+(*   else *)
+(*     let rec loop n s = *)
+(*       if n = 0 then s#Head *)
+(*       else loop (pred n) s#Tail *)
+(*     in loop n s *)
+
+(* (\* [find_index p s] returns the index of the first element in the stream that *)
+(*    satisfies p. Beware: find_index p s will diverge if none of the elements of *)
+(*    s satisfy p. *\) *)
+
+(* let find_index p s = *)
+(*   let rec aux s n = *)
+(*     if p s#Head then n *)
+(*     else aux s#Tail (succ n) *)
+(*   in aux s 0 *)
+
+(* (\* [find_indices p s] extends find_index by returning the *)
+(*    indices of all elements of s satisfying p, in ascending order. *\) *)
+
+(* let find_indices : type a. (a -> bool) -> a !stream -> int !stream = *)
+(*   fun p s -> *)
+(*     let rec aux (n : int) s : int !stream = *)
+(*       if p s#Head then cofunction : int !stream with *)
+(*         | ..#Head -> n *)
+(*         | ..#Tail -> aux (succ n) s#Tail *)
+(*       else aux (succ n) s#Tail *)
+(*     in aux 0 s *)
+
+(* (\* [elem_index x s] returns the index of the first element in s which is equal *)
+(*    to x. *)
+(*    Beware: elem_index x s will diverge if none of the elements of s equal x. *\) *)
+
+(* let elem_index x s = find_index (fun y -> x = y) *)
+
+(* (\* [elemIndices x s] function extends elem_index, by returning the indices of *)
+(*    all elements equal to the query element, in ascending order. *)
+(*    Beware: elemIndices x s will diverge if any suffix of s does not *)
+(*    contain x. *\) *)
+
+(* let elem_indices x s = find_indices (fun y -> x = y) *)
+
+(* (\** Zipping and unzipping streams *\) *)
+
+(* (\* [zip_with f s1 s2] generalizes zip. Rather than tupling the functions, *)
+(*    the elements are combined using the function passed as the first argument *)
+(*    to zip_with. *\) *)
+
+(* let rec zip_with : type a b c. *)
+(*   (a -> b -> c) -> a !stream -> b !stream -> c !stream = *)
+(*   fun f s1 s2 -> cofunction : c !stream with *)
+(*    | ..#Head -> f s1#Head s2#Head *)
+(*    | ..#Tail -> zip_with f s1#Tail s2#Tail *)
+
+(* (\* [zip s1 s2] returns the stream of pairs obtained by pairing elements at *)
+(*    the same position in s1 and s2. *\) *)
+
+(* let zip s1 s2 = zip_with (fun a b -> (a,b)) s1 s2 *)
+
+(* (\* The unzip function is the inverse of the zip function. *\) *)
+
+(* let unzip s = (map fst s, map snd s) *)
+
+(* (\** Functions on streams of characters *\) *)
+
+(* (\* [implode cs] takes a list of char and returns the corresponding string. *\) *)
+
+(* let implode cs = *)
+(*   let res = Bytes.create (List.length cs) in *)
+(*   List.iteri (Bytes.set res) cs; *)
+(*   res *)
+
+(* (\* [explode s] takes a string and returns the corresponding list of char. *\) *)
+
+(* let explode s = *)
+(*   let rec aux n acc = *)
+(*     if n < 0 then acc *)
+(*     else aux (pred n) (s.[n] :: acc) *)
+(*   in aux (String.length s - 1) [] *)
+
+(* (\* [words s] breaks s into a stream of words, which were delimited by *)
+(*    white space. *)
+(*    Beware: if the stream of characters s does not contain white space, *)
+(*    accessing the tail of words s will loop. *\) *)
+
+(* let rec words s : string !stream = *)
+(*   let (hd,tl) = break (fun c -> c = ' ') s in *)
+(*   cofunction : string !stream with *)
+(*     | ..#Head -> implode hd *)
+(*     | ..#Tail -> words tl *)
+
+(* (\* [unwords s] function is an inverse operation to words. *)
+(*    It joins words with separating spaces. *\) *)
+
+(* let rec unwords s : char !stream = *)
+(*   let acc = cofunction : (char !stream) !delay with *)
+(*    | ..#Force : char !stream with *)
+(*    | ...#Head  -> ' ' *)
+(*    | ...#Tail -> unwords s#Tail *)
+(*   in delayed_prefix (explode s#Head) acc *)
+
+(* (\* [lines s] function breaks a stream of characters into a list of strings *)
+(*    at newline characters. The resulting strings do not contain newlines. *)
+(*    Beware: if the stream of characters s does not contain newline characters, *)
+(*    accessing the tail of lines s will loop. *\) *)
+
+(* let rec lines s : string !stream = *)
+(*   let (x,t) = break (fun c -> c = '\n') s in *)
+(*   cofunction : string !stream with *)
+(*     | ..#Head -> implode x *)
+(*     | ..#Tail -> lines t *)
+
+(* (\* [unlines s] is an inverse operation to lines. It joins lines, after *)
+(*    appending a terminating newline to each. *\) *)
+
+(* let rec unlines s : char !stream = *)
+(*   let acc = cofunction : (char !stream) !delay with *)
+(*    | ..#Force : char !stream with *)
+(*    | ...#Head  -> '\n' *)
+(*    | ...#Tail -> unlines s#Tail *)
+(*   in delayed_prefix (explode s#Head) acc *)
+
+(* (\* The Stream Monad *\) *)
+
+(* module type MONAD = sig *)
+(*   type 'a t *)
+(*   val return : 'a -> 'a t *)
+(*   val ( >>= ) : 'a t -> ('a -> 'b t) -> 'b t *)
+(* end *)
+
+(* let rec join : type a. (a !stream) !stream -> a !stream = *)
+(*   fun s -> cofunction : a !stream with *)
+(*    | ..#Head -> s#Head#Head *)
+(*    | ..#Tail -> join (map tail s#Tail) *)
+
+(* module Monad : MONAD with type 'a t = 'a !stream = struct *)
+(*   type 'a t = 'a !stream *)
+(*   let return = repeat *)
+(*   let ( >>= ) m f = join (map f m) *)
+(* end *)

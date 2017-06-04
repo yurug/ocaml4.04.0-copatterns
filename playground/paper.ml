@@ -1,328 +1,344 @@
-(** A codatatype for stream. *)
-type 'a !stream = {
-    Head : 'a;
-    Tail : 'a !stream
-}
+(* Benchmarks. *)
 
-let rec map2
-  : type a b c. (a -> b -> c) -> a !stream -> b !stream -> c !stream
-  = fun f s1 s2 ->
-    comatch r : c !stream with
-    | r#Head -> f s1#Head s2#Head
-    | r#Tail -> map2 f s1#Tail s2#Tail
-
-let fib : int !stream = comatch fib : int !stream with
-  | fib#Head -> 1
-  | fib#Tail : int !stream with
-  | ..#Head -> 1
-  | ..#Tail -> map2 ( + ) fib fib#Tail
-
-let rec ( ** ) f n =
-  if n = 0 then fun x -> x
-  else fun x -> (f ** (n - 1)) (f x)
-
-let nth n s = ((tail ** n) s)#Head
-
-let rec lazy_map2
-  : type a b c. (a -> b -> c) -> a !stream -> b !stream -> c !stream
-  = fun f s1 s2 ->
-    lazy comatch r : c !stream with
-    | r#Head -> f s1#Head s2#Head
-    | r#Tail -> lazy_map2 f s1#Tail s2#Tail
-
-let lazy_fib : int !stream = lazy comatch fib : int !stream with
-  | fib#Head -> 1
-  | fib#Tail : int !stream with
-  | ..#Head -> 1
-  | ..#Tail -> lazy_map2 ( + ) fib fib#Tail
-
-let bench f =
-Unix.(
+let bench f = Unix.(
     let start = Unix.gettimeofday () in
     let y = f () in
     let stop = Unix.gettimeofday () in
     (y, stop -. start)
-)
+  )
 
-let f5 = nth 5 fib
-let f30, et_f30 = bench (fun () -> nth 30 fib)
-let fast_f30, et_fast_f30 = bench (fun () -> nth 30 lazy_fib)
+(** The cotype stream with two observations : Head and Tail. *)
 
-(** An indexed codatatype for fair bistream. *)
-type read = Read
-type unread = Unread
-
-type (_,_) !fairbistream = {
-  Left  : int * (read , 'b) !fairbistream <- (unread, 'b) !fairbistream;
-  Right : int * ('a , read) !fairbistream <- ('a, unread) !fairbistream;
-  BTail : (unread , unread) !fairbistream <- (read, read) !fairbistream;
+type 'a !stream = {
+  Head : 'a;
+  Tail : 'a !stream;
 }
 
-type ( 'a , 'b , 'e ) twobuffer =
-| E : ( read , read , 'e ) twobuffer
-| L : 'e -> ( unread , read , 'e ) twobuffer
-| R : 'e -> ( read , unread , 'e ) twobuffer
-| F : 'e * 'e -> ( unread , unread , 'e ) twobuffer
+let rec ( ** ) f n =
+  if n = 0 then fun x -> x
+  else fun x -> (f ** (pred n)) (f x)
+
+let nth n s = ((tail ** n) s)#Head
+
+(** Fibonacci examples. *)
+
+(** - Without memoization. *)
+
+let rec map2
+  : type a b c. (a -> b -> c) -> a !stream -> b !stream -> c !stream
+  = fun f s1 s2 -> cofunction : c !stream with
+    | ..#Head -> f s1#Head s2#Head
+    | ..#Tail -> map2 f s1#Tail s2#Tail
+
+let corec fib : int !stream with
+  | ..#Head -> 1
+  | ..#Tail : int !stream with
+  | ...#Head -> 1
+  | ...#Tail -> map2 ( + ) fib fib#Tail
+
+(** -- With memoization. *)
+
+let rec lazy_map2
+  : type a b c. (a -> b -> c) -> a !stream -> b !stream -> c !stream
+  = fun f s1 s2 ->
+    lazy cofunction : c !stream with
+    | ..#Head -> f s1#Head s2#Head
+    | ..#Tail -> lazy_map2 f s1#Tail s2#Tail
+
+let rec lazy_fib : int !stream = lazy cofunction : int!stream with
+  | ..#Head -> 1
+  | ..#Tail : int !stream with
+  | ...#Head -> 1
+  | ...#Tail -> lazy_map2 ( + ) lazy_fib lazy_fib#Tail
+
+let show_fib is_lazy n =
+  let f = if is_lazy then lazy_fib else fib in
+  let name = if is_lazy then "lazy fib" else "fib" in
+  let (r,t) = bench (fun () -> nth n f) in
+  Printf.printf "%s (%d) = %d [in %f seconds]\n" name n r t
+
+(** An indexed codatatype for fair bistream. *)
+
+type read and unread
+
+(** The cotype fairbistream with three observations : Left, Right and BTail. *)
+
+type (_,_) !fairbistream = {
+  Left  : int * (read, 'b) !fairbistream <- (unread, 'b) !fairbistream;
+  Right : int * ('a, read) !fairbistream <- ('a, unread) !fairbistream;
+  BTail : (unread, unread) !fairbistream <- (read, read) !fairbistream;
+}
+
+type ('a, 'b, 'e) twobuffer =
+| E : ( read, read, 'e ) twobuffer
+| L : 'e -> ( unread, read, 'e ) twobuffer
+| R : 'e -> ( read, unread, 'e ) twobuffer
+| F : 'e * 'e -> ( unread, unread, 'e ) twobuffer
 
 (* fixme *)
-let z : (unread, read) ! fairbistream =
-  let rec zfrom' : type a b . int -> (a , b , int ) twobuffer -> (a , b ) ! fairbistream = fun n buf ->
-    comatch zf : (a,b) ! fairbistream with
-    | zf#BTail -> (match buf with E -> zfrom' (n + 1) (F (n, -n)))
-    | zf#Left  -> (match buf with L x -> (x, zfrom' n E) | F (x, y) -> (x, zfrom' n (R y)))
-    | zf#Right -> (match buf with R x -> (x, zfrom' n E) | F (x, y) -> (y, zfrom' n (L x)))
-  in zfrom' 0 (L 0)
+let z =
+  let corec zfrom : type a b. int -> (a,b,int) twobuffer -> (a,b) !fairbistream
+      with
+      | (.. n E)#BTail -> zfrom (n + 1) (F (n, -n))
+      | (.. n (L x))#Left  -> (x, zfrom n E)
+      | (.. n (F (x,y)))#Left  -> (x, zfrom n (R y))
+      | (.. n (R x))#Right -> (x, zfrom n E)
+      | (.. n (F (x, y)))#Right -> (y, zfrom n (L x))
+  in zfrom 0 (L 0)
 
-(* fixme *)
-let rec stream_of_fairbistream : (unread, unread) !fairbistream -> int !stream = fun bi ->
-  let rec read_left : (unread, unread) !fairbistream -> int !stream = fun bi ->
-   comatch s : int !stream with
-   | s#Head -> fst (left bi)
-   | s#Tail -> (read_right (snd (left bi)) : int !stream)
-  and read_right : (read, unread) !fairbistream -> int !stream = fun bi ->
-   comatch s : int !stream with
-   | s#Head -> fst (right bi)
-   | s#Tail -> stream_of_fairbistream (bTail (snd (right bi)))
-  in
-  read_left bi
+let rec stream_of_fairbistream : (unread, unread) !fairbistream -> int !stream
+  = fun bi ->
+    let corec read_left : (unread, unread) !fairbistream -> int !stream with
+      | (.. bi)#Head -> fst bi#Left
+      | (.. bi)#Tail -> read_right (snd bi#Left)
+    and corec read_right : (read, unread) !fairbistream -> int !stream with
+      | (.. bi)#Head -> fst bi#Right
+      | (.. bi)#Tail -> stream_of_fairbistream (snd (bi#Right))#BTail
+    in read_left bi
 
 let mfive = nth 11 (stream_of_fairbistream (snd z#Left)#BTail)
 
-let show = Printf.printf "
-fib 5       = %d
-fib 30      = %d [in %f seconds]
-fast fib 30 = %d [in %f seconds]
-minus five  = %d
-\n%!" f5 f30 et_f30 fast_f30 et_fast_f30 mfive
+(** Game of life and zippers. *)
 
-type 'a !comonad = {
+(** The cotype zipper with three observations : Left, Proj, Right. *)
+
+type 'a !zipper = {
   Left  : 'a !stream;
   Proj  : 'a;
   Right : 'a !stream;
 }
 
-module GameOfLifeV1 = struct
+module type GOL = sig
+  val move_left : 'a !zipper -> 'a !zipper
+  val move_right : 'a !zipper -> 'a !zipper
+  val game_of_life : (bool !zipper) !stream
+end
 
-let repeat : type a. a -> a !stream = fun x -> comatch s : a !stream with
-| s#Head -> x
-| s#Tail -> s
+(* Version 1 *)
 
-let point : type a. a -> a -> a !comonad = fun x y -> comatch c : a !comonad with
-| c#Left  -> repeat y
-| c#Proj  -> x
-| c#Right -> repeat y
+module GOL_1 = struct
 
-let go_left : type a. a !comonad -> a !comonad =
-  fun com -> comatch c : a !comonad with
-   | c#Left -> com#Left#Tail
-   | c#Proj -> com#Left#Head
-   | c#Right : a !stream with
-     | ..#Head -> com#Proj
-     | ..#Tail -> com#Right
+  let corec repeat : type a. a -> a !stream with
+    | (..x) #Head -> x
+    | (..x) #Tail -> repeat x
 
-let go_right : type a. a !comonad -> a !comonad =
-  fun com -> comatch c : a !comonad with
-   | c#Left : a !stream with begin
-     | ..#Head -> proj com
-     | ..#Tail -> left com
-   end
-   | c#Proj -> com#Right#Head
-   | c#Right -> com#Right#Tail
+  let point : type a. a -> a -> a !zipper
+    = fun x y -> cofunction : a !zipper with
+    | ..#Left  -> repeat y
+    | ..#Proj  -> x
+    | ..#Right -> repeat y
 
-let rec map_iterate : type a b. (a -> b) -> (a -> a) -> a -> b !stream =
-  fun f shift c -> comatch s : b !stream with
-    | s#Head -> f c
-    | s#Tail -> map_iterate f shift (shift c)
+  let move_left : type a. a !zipper -> a !zipper =
+    fun z -> cofunction : a !zipper with
+     | ..#Left -> z#Left#Tail
+     | ..#Proj -> z#Left#Head
+     | ..#Right : a !stream with
+       | ...#Head -> z#Proj
+       | ...#Tail -> z#Right
 
-let cobind : type a b. (a !comonad -> b) -> a !comonad -> b !comonad =
-  fun f c -> comatch com : b !comonad with
-   | com#Left -> map_iterate f go_left (go_left c)
-   | com#Proj -> f c
-   | com#Right -> map_iterate f go_right (go_right c)
+  let move_right : type a. a !zipper -> a !zipper =
+    fun z -> cofunction : a !zipper with
+     | ..#Left : a !stream with begin
+       | ...#Head -> z#Proj
+       | ...#Tail -> z#Left
+     end
+     | ..#Proj  -> z#Right#Head
+     | ..#Right -> z#Right#Tail
 
-let rule (c: bool !comonad) =
-  let left  = proj (go_left c)
-  and middle = proj c
-  and right = proj (go_right c) in
-  not (left && middle && not right || (left = middle))
+  let rec map_iterate : type a b. (a -> b) -> (a -> a) -> a -> b !stream
+    = fun f shift x -> cofunction : b !stream with
+    | ..#Head -> f x
+    | ..#Tail -> map_iterate f shift (shift x)
 
-let rec fold
-  : type a. (a -> a) -> a -> a !stream
-  = fun f a -> comatch r : a !stream with
-    | r#Head -> a
-    | r#Tail -> fold f (f a)
+  let cobind : type a b. (a !zipper -> b) -> a !zipper -> b !zipper
+    = fun f z -> cofunction : b !zipper with
+    | ..#Left  -> map_iterate f move_left (move_left z)
+    | ..#Proj  -> f z
+    | ..#Right -> map_iterate f move_right (move_right z)
 
-let game_of_life = fold (cobind rule) (point true false)
+  let rule z =
+    let left  = proj (move_left z)
+    and middle = proj z
+    and right = proj (move_right z) in
+    not (left && middle && not right || left = middle)
 
-let print c =
-  let r = ref c in
-  for i = 1 to 20 do r := go_left !r done;
-  for i = 1 to 40 do
-    print_char (if proj !r then '#' else '.');
-    r := go_right !r
-  done;
-  print_newline ()
+  let rec iterate : type a. (a -> a) -> a -> a !stream
+    = fun f a -> cofunction : a !stream with
+    | ..#Head -> a
+    | ..#Tail -> iterate f (f a)
 
-let show, et_show = bench (fun () ->
-  for i = 1 to 10 do
-    print (nth i game_of_life)
-  done)
-
-let _ = Printf.printf "In %f seconds.\n" et_show
+  let game_of_life = iterate (cobind rule) (point true false)
 
 end
 
-module GameOfLifeV2 = struct
+(* Version 2 with memoization. *)
 
-let repeat : type a. a -> a !stream = fun x ->
-  lazy comatch s : a !stream with
-  | s#Head -> x
-  | s#Tail -> s
+module GOL_2 = struct
 
-let point : type a. a -> a -> a !comonad = fun x y ->
-  lazy comatch c : a !comonad with
-  | c#Left  -> repeat y
-  | c#Proj  -> x
-  | c#Right -> repeat y
+  let corec lazy repeat : type a. a -> a !stream with
+    | (..x) #Head -> x
+    | (..x) #Tail -> repeat x
 
-let go_left : type a. a !comonad -> a !comonad =
-  fun com -> lazy comatch c : a !comonad with
-   | c#Left -> com#Left#Tail
-   | c#Proj -> com#Left#Head
-   | c#Right : a !stream with
-     | ..#Head-> com#Proj
-     | ..#Tail -> com#Right
+  let point : type a. a -> a -> a !zipper
+    = fun x y -> lazy cofunction : a !zipper with
+    | ..#Left  -> repeat y
+    | ..#Proj  -> x
+    | ..#Right -> repeat y
 
-let go_right : type a. a !comonad -> a !comonad =
-  fun com -> lazy comatch c : a !comonad with
-   | c#Left : a !stream with begin
-   | ..#Head -> com#Proj
-   | ..#Tail -> com#Left
-   end
-   | c#Proj -> com#Right#Head
-   | c#Right -> com#Right#Tail
+  let move_left : type a. a !zipper -> a !zipper =
+    fun z -> lazy cofunction : a !zipper with
+     | ..#Left -> z#Left#Tail
+     | ..#Proj -> z#Left#Head
+     | ..#Right : a !stream with
+       | ...#Head -> z#Proj
+       | ...#Tail -> z#Right
 
-let rec map_iterate : type a b. (a -> b) -> (a -> a) -> a -> b !stream
-  = fun f shift c -> lazy comatch s : b !stream with
-| s#Head -> f c
-| s#Tail -> map_iterate f shift (shift c)
+  let move_right : type a. a !zipper -> a !zipper =
+    fun z -> lazy cofunction : a !zipper with
+     | ..#Left : a !stream with begin
+       | ...#Head -> z#Proj
+       | ...#Tail -> z#Left
+     end
+     | ..#Proj  -> z#Right#Head
+     | ..#Right -> z#Right#Tail
 
-let cobind : type a b. (a !comonad -> b) -> a !comonad -> b !comonad =
-  fun f c -> lazy comatch com : b !comonad with
-| com#Left -> map_iterate f go_left (go_left c)
-| com#Proj -> f c
-| com#Right -> map_iterate f go_right (go_right c)
+  let rec map_iterate : type a b. (a -> b) -> (a -> a) -> a -> b !stream
+    = fun f shift x -> lazy cofunction : b !stream with
+    | ..#Head -> f x
+    | ..#Tail -> map_iterate f shift (shift x)
 
-let rule (c: bool !comonad) =
-  let left  = proj (go_left c)
-  and middle = proj c
-  and right = proj (go_right c) in
-  not (left && middle && not right || (left = middle))
+  let cobind : type a b. (a !zipper -> b) -> a !zipper -> b !zipper
+    = fun f z -> lazy cofunction : b !zipper with
+    | ..#Left  -> map_iterate f move_left (move_left z)
+    | ..#Proj  -> f z
+    | ..#Right -> map_iterate f move_right (move_right z)
 
-let rec fold
-  : type a. (a -> a) -> a -> a !stream
-  = fun f a -> comatch r : a !stream with
-     | r#Head -> a
-     | r#Tail -> fold f (f a)
+  let rule z =
+    let left  = proj (move_left z)
+    and middle = proj z
+    and right = proj (move_right z) in
+    not (left && middle && not right || left = middle)
 
-let game_of_life = fold (cobind rule) (point true false)
+  let rec iterate : type a. (a -> a) -> a -> a !stream
+    = fun f a -> lazy cofunction : a !stream with
+    | ..#Head -> a
+    | ..#Tail -> iterate f (f a)
 
-let print c =
-  let r = ref c in
-  for i = 1 to 20 do r := go_left !r done;
-  for i = 1 to 40 do
-    print_char (if proj !r then '#' else '.');
-    r := go_right !r
-  done;
-  print_newline ()
-
-let show, et_show = bench (fun () ->
-  for i = 1 to 10 do
-    print (nth i game_of_life)
-  done)
-
-let _ = Printf.printf "In %f seconds.\n" et_show
+  let game_of_life = iterate (cobind rule) (point true false)
 
 end
 
-module GameOfLifeV3 = struct
+(* Version 3 with memoization and using reified observation.  *)
 
-let repeat : type a. a -> a !stream = fun x ->
-  lazy comatch s : a !stream with
-  | s#Head -> x
-  | s#Tail -> s
+module GOL_3 = struct
 
-let point : type a. a -> a -> a !comonad =
-  fun x y -> lazy comatch c : a !comonad with
-   | c#Left  -> repeat y
-   | c#Proj  -> x
-   | c#Right -> repeat y
+  let corec lazy repeat : type a. a -> a !stream with
+    | (..x) #Head -> x
+    | (..x) #Tail -> repeat x
 
-let comonad_abstract_dispatch :
-  type a o.
-  ((a query, a) comonad -> a)
-  -> ((a !stream query, a) comonad -> a !stream)
-  -> ((o query, a) comonad -> o)
-  = fun on_proj on_direction -> function
-    | Proj -> on_proj Proj
-    | Left -> on_direction Left
-    | Right -> on_direction Right
+  let point : type a. a -> a -> a !zipper
+    = fun x y -> lazy cofunction : a !zipper with
+    | ..#Left  -> repeat y
+    | ..#Proj  -> x
+    | ..#Right -> repeat y
 
-let go : type a.
-  (a !stream query, a) comonad -> (a !comonad -> a !stream) -> (a !comonad -> a !stream)
-  -> a !comonad -> a !comonad = fun direction fwd bwd com ->
-  let bs = comatch s : a !stream with s # Head -> proj com | s # Tail -> bwd com in
-  let fs = com |> fwd |> tail in
-  let dispatch : type o. (o query, a) comonad -> o = fun o ->
-  comonad_abstract_dispatch
-    (fun _ -> com |> fwd |> head)
-    (fun direction' -> if direction = direction' then fs else bs
-    ) o
+  let custom_dispatch : type a.
+    ((a query, a) zipper -> a) ->
+    (((a !stream) query, a) zipper -> a !stream) ->
+    a !zipper
+    = fun pr dir -> cofunction : a !zipper with
+      | ..#Proj -> pr Proj
+      | ..#Left -> dir Left
+      | ..#Right -> dir Right
+
+  let move : type a.
+    ((a !stream) query, a) zipper ->
+    (a !zipper -> a !stream) ->
+    (a !zipper -> a !stream) ->
+    a !zipper -> a !zipper
+    = fun dir fwd bwd z ->
+       let corec bs : a !stream with
+         | ..#Head -> z#Proj
+         | ..#Tail -> bwd z
+       in
+       custom_dispatch
+         (fun _ -> (fwd z)#Head)
+         (fun dir' -> if dir = dir' then (fwd z)#Tail else bs)
+
+  let move_left z = move Left left right z
+  let move_right z = move Right right left z
+
+  let rec map_iterate : type a b. (a -> b) -> (a -> a) -> a -> b !stream
+    = fun f shift x -> lazy cofunction : b !stream with
+    | ..#Head -> f x
+    | ..#Tail -> map_iterate f shift (shift x)
+
+  let cobind : type a b. (a !zipper -> b) -> a !zipper -> b !zipper
+    = fun f z -> lazy cofunction : b !zipper with
+    | ..#Left  -> map_iterate f move_left (move_left z)
+    | ..#Proj  -> f z
+    | ..#Right -> map_iterate f move_right (move_right z)
+
+  let rule z =
+    let left  = proj (move_left z)
+    and middle = proj z
+    and right = proj (move_right z) in
+    not (left && middle && not right || left = middle)
+
+  let rec iterate : type a. (a -> a) -> a -> a !stream
+    = fun f a -> lazy cofunction : a !stream with
+    | ..#Head -> a
+    | ..#Tail -> iterate f (f a)
+
+  let game_of_life = iterate (cobind rule) (point true false)
+
+end
+
+let print (module G : GOL) z =
+  let r = ref z in
+  for i = 1 to 2 do r := G.move_left !r done;
+  for i = 1 to 10 do
+    print_char (if proj !r then '#' else '.');
+    r := G.move_right !r
+  done;
+  print_newline ()
+
+let show_gol n =
+  let (module G : GOL) = match n with
+    | 1 -> (module GOL_1)
+    | 2 -> (module GOL_2)
+    | 3 -> (module GOL_3)
+    | _ -> assert false
   in
-  COMONAD { dispatch }
+  let name = Printf.sprintf "Game of life version %d" n in
+  let ((),t) = bench (fun () ->
+      for i = 1 to 30 do
+        print (module G) (nth i G.game_of_life)
+      done)
+  in
+  Printf.printf "%s [in %f seconds]\n" name t
+let show_gol n =
+  let (module G : GOL) = match n with
+    | 1 -> (module GOL_1)
+    | 2 -> (module GOL_2)
+    | 3 -> (module GOL_3)
+    | _ -> assert false
+  in
+  let name = Printf.sprintf "Game of life version %d" n in
+  let ((),t) = bench (fun () ->
+      for i = 1 to 12 do
+        print (module G) (nth i G.game_of_life)
+      done)
+  in
+  Printf.printf "%s [in %f seconds]\n" name t
 
-let go_left  s = go Left left right s
-let go_right s = go Right right left s
+(* Benchs. *)
 
-let rec map_iterate : type a b. (a -> b) -> (a -> a) -> a -> b !stream
-  = fun f shift c -> lazy comatch s : b !stream with
-| s#Head -> f c
-| s#Tail -> map_iterate f shift (shift c)
-
-let cobind : type a b. (a !comonad -> b) -> a !comonad -> b !comonad =
-  fun f c -> lazy comatch com : b !comonad with
-| com#Left -> map_iterate f go_left (go_left c)
-| com#Proj -> f c
-| com#Right -> map_iterate f go_right (go_right c)
-
-let rule (c: bool !comonad) =
-  let left  = proj (go_left c)
-  and middle = proj c
-  and right = proj (go_right c) in
-  not (left && middle && not right || (left = middle))
-
-let rec fold
-: type a. (a -> a) -> a -> a !stream
-= fun f a -> comatch r : a !stream with
-| r#Head -> a
-| r#Tail -> fold f (f a)
-
-let game_of_life = fold (cobind rule) (point true false)
-
-let print c =
-  let r = ref c in
-  for i = 1 to 20 do r := go_left !r done;
-  for i = 1 to 40 do
-    print_char (if proj !r then '#' else '.');
-    r := go_right !r
-  done;
-  print_newline ()
-
-let show, et_show = bench (fun () ->
-  for i = 1 to 10 do
-    print (nth i game_of_life)
-  done)
-
-let _ = Printf.printf "In %f seconds.\n" et_show
-
-end
+let () =
+  show_fib false 10;
+  show_fib true 10;
+  show_fib false 30;
+  show_fib true 30;
+  show_gol 1;
+  show_gol 2;
+  show_gol 3

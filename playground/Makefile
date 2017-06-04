@@ -1,19 +1,12 @@
-TARGET = paper
-CMP    = ../ocamlc
-ARG    = -custom unix.cma
+OCAML = ../ocaml
+OCAMLC = ../ocamlc
 
-all: default run
+SRC := $(filter-out paper.ml,$(wildcard *.ml))
 
-default:
-	@echo "- Compile.."
-	@$(CMP) $(ARG) $(TARGET).ml -o $(TARGET)
+default: $(SRC)
+	@echo "- Typecheking"
+	@for file in $(SRC); do (echo -- $$file; $(OCAML) $$file); done
 
-run:
-	@echo "- Run.."
-	@./$(TARGET)
-
-clean:
-	@rm -f *~ *.cmi *.cmo
-
-white: clean
-	@rm -f $(TARGET)
+paper: paper.ml
+	$(OCAMLC) -custom unix.cma paper.ml -o paper
+	./paper
