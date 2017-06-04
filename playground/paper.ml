@@ -57,6 +57,21 @@ let show_fib is_lazy n =
   let (r,t) = bench (fun () -> nth n f) in
   Printf.printf "%s (%d) = %d [in %f seconds]\n" name n r t
 
+(** Simple example of nested copattern matching. *)
+
+type _ repr =
+  | Int   : int   -> int repr
+  | Bool  : bool  -> bool repr
+
+type _ !qrepr = {
+  QInt   : int   <- int !qrepr;
+  QBool  : bool  <- bool !qrepr;
+}
+
+let corec f : type a. a repr -> a !qrepr with
+   | (.. (Int n))#QInt -> n
+   | (.. (Bool b))#QBool -> b
+
 (** An indexed codatatype for fair bistream. *)
 
 type read and unread
