@@ -90,7 +90,6 @@ type ('a, 'b, 'e) twobuffer =
 | R : 'e -> ( read, unread, 'e ) twobuffer
 | F : 'e * 'e -> ( unread, unread, 'e ) twobuffer
 
-(* fixme *)
 let z =
   let corec zfrom : type a b. int -> (a,b,int) twobuffer -> (a,b) !fairbistream
       with
@@ -328,20 +327,6 @@ let show_gol n =
   let name = Printf.sprintf "Game of life version %d" n in
   let ((),t) = bench (fun () ->
       for i = 1 to 30 do
-        print (module G) (nth i G.game_of_life)
-      done)
-  in
-  Printf.printf "%s [in %f seconds]\n" name t
-let show_gol n =
-  let (module G : GOL) = match n with
-    | 1 -> (module GOL_1)
-    | 2 -> (module GOL_2)
-    | 3 -> (module GOL_3)
-    | _ -> assert false
-  in
-  let name = Printf.sprintf "Game of life version %d" n in
-  let ((),t) = bench (fun () ->
-      for i = 1 to 12 do
         print (module G) (nth i G.game_of_life)
       done)
   in
