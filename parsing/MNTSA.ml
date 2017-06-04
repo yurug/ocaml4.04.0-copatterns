@@ -326,8 +326,9 @@ module QTree = struct
       | LApp ({S.ppat_desc = S.Ppat_var x}, ty) :: tks ->
           aux ((x.txt, ty) :: acc) full_path tks
       | LDes (d,ty) :: tks ->
-          let qt = aux [] (full_path @ List.rev acc) tks in
-          qtree acc (QTrees [(d.txt,ty) , qt])
+          let path = List.rev acc in
+          let qt = aux [] (full_path @ path) tks in
+          qtree path (QTrees [(d.txt,ty) , qt])
       | LApp _ :: _ ->
           assert false   (* by construction *)
     in aux [] full_path tks
@@ -351,18 +352,19 @@ module QTree = struct
           begin match qt.children with
           | QMatch _ -> assert false      (* by construction *)
           | QTrees qts ->
+              let path = List.rev acc in
               begin try
                 (* d ∈ qts *)
                 let new_qts =
                   let cond ((d',_), _) = (d = d') in
-                  let act (dt, qt) = (dt, aux acc qt tks) in
+                  let act (dt, qt) = (dt, aux path qt tks) in
                   list_map_exists cond act qts
                 in
                 { qt with children = QTrees new_qts }
               with
               | Not_found ->
                   (* d ∉ qts *)
-                  let new_qt = init acc tks in
+                  let new_qt = init path tks in
                   let new_child = ((d,ty), new_qt) in
                   { qt with children = QTrees (new_child :: qts) }
               end
@@ -381,27 +383,30 @@ module QTree = struct
     let rec sub acc acc2 qt = function
       | [] -> begin match qt.children with
           | QTrees _ ->
+              (* The copattern is not deep enough. *)
               Location.prerr_warning loc Warnings.Unused_match;
               qt
           | QMatch qm ->
+              (* here we should check the arity to adjust arrow symmetry. *)
               let path = acc @ List.rev acc2 in
               let new_qm = { qm with qcases = qm.qcases @ [(path,lc.rhs)] } in
               { qt with children = QMatch new_qm }
         end
+      (* Applicative. *)
       | LApp (p,_) :: tks ->
           sub acc (p :: acc2) qt tks
+      (* Destructors. *)
       | [LDes ({txt = d}, _)] ->
           begin match qt.children with
           | QMatch _ -> assert false
           | QTrees xs ->
               let cond ((d',_),_) = (d = d') in
-              let path = acc @ List.rev acc2 in
               let act ((d,ty), qt) = match qt.children with
-                | QMatch {qcases = [([],_)]} when path = [] ->
+                | QMatch {qcases = [([],_)]} when acc = [] && acc2 = [] ->
                     Location.prerr_warning loc Warnings.Unused_match;
                     ((d,ty), qt)
                 | _ ->
-                    ((d,ty), sub [] path qt [])
+                    ((d,ty), sub acc acc2 qt [])
               in
               let new_qts = list_map_exists cond act xs in
               { qt with children = QTrees new_qts }

@@ -1891,7 +1891,8 @@ let_binding:
     LET ext_attributes rec_flag let_binding_body post_item_attributes
       { let (ext, attr) = $2 in
         mklbs ext $3 (mklb true $4 (attr@$5)) }
-  | LET COREC lazy_modifier val_ident COLON TYPE lident_list DOT core_type WITH opt_bar comatch_cocases
+  | LET COREC lazy_modifier val_ident COLON TYPE lident_list DOT core_type
+     WITH opt_bar comatch_cocases
       {
         let tys = split_typ $9 in
         let cocases = List.rev $12 in
@@ -1917,6 +1918,23 @@ let_binding:
 and_let_binding:
     AND attributes let_binding_body post_item_attributes
       { mklb false $3 ($2@$4) }
+  | AND COREC lazy_modifier val_ident COLON TYPE lident_list DOT core_type
+     WITH opt_bar comatch_cocases
+      {
+        let tys = split_typ $9 in
+        let cocases = List.rev $12 in
+        let new_cocases = propagate_typs_toplevel tys cocases in
+        let cofun = Exp.cofunction_ $3 $9 new_cocases in
+        let exp, poly = wrap_type_annotation $7 $9 cofun in
+        mklb false (ghpat(Ppat_constraint(mkpatvar $4 4, poly)), exp) []
+      }
+  | AND COREC lazy_modifier val_ident COLON core_type WITH opt_bar comatch_cocases
+       { let tys = split_typ $6 in
+         let cocases = List.rev $9 in
+         let new_cocases = propagate_typs_toplevel tys cocases in
+         let cofun = Exp.cofunction_ $3 $6 new_cocases in
+         mklb false (ghpat(Ppat_constraint (mkpatvar $4 4, $6)), cofun) []
+       }
 ;
 fun_binding:
     strict_binding
