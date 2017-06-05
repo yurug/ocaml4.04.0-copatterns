@@ -90,16 +90,14 @@ type ('a, 'b, 'e) twobuffer =
 | R : 'e -> ( read, unread, 'e ) twobuffer
 | F : 'e * 'e -> ( unread, unread, 'e ) twobuffer
 
-let z =
-  let corec zfrom : type a b. int -> (a,b,int) twobuffer -> (a,b) !fairbistream
-      with
-      | (.. n E)#BTail -> zfrom (n + 1) (F (n, -n))
-      | (.. n (L x))#Left  -> (x, zfrom n E)
-      | (.. n (F (x,y)))#Left  -> (x, zfrom n (R y))
-      | (.. n (R x))#Right -> (x, zfrom n E)
-      | (.. n (F (x, y)))#Right -> (y, zfrom n (L x))
-  in zfrom 0 (L 0)
+let corec zfrom : type a b. int -> (a,b,int) twobuffer -> (a,b) !fairbistream with
+  | (.. n E)#BTail -> zfrom (n + 1) (F (n, -n))
+  | (.. n (L x))#Left  -> (x, zfrom n E)
+  | (.. n (F (x,y)))#Left  -> (x, zfrom n (R y))
+  | (.. n (R x))#Right -> (x, zfrom n E)
+  | (.. n (F (x, y)))#Right -> (y, zfrom n (L x))
 
+let z = zfrom 0 (L 0)
 let rec stream_of_fairbistream : (unread, unread) !fairbistream -> int !stream
   = fun bi ->
     let corec read_left : (unread, unread) !fairbistream -> int !stream with
@@ -326,7 +324,7 @@ let show_gol n =
   in
   let name = Printf.sprintf "Game of life version %d" n in
   let ((),t) = bench (fun () ->
-      for i = 1 to 30 do
+      for i = 1 to 12 do
         print (module G) (nth i G.game_of_life)
       done)
   in
