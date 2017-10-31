@@ -2,13 +2,13 @@
 
 type nat = Zero | Succ of nat
 
-type 'a stream = ('a cell) Lazy.t and 'a cell = Cell of 'a * 'a stream
+type 'a _stream = ('a cell) Lazy.t and 'a cell = Cell of 'a * 'a _stream
 
-let rec from : nat -> nat stream = fun n -> lazy (Cell (n, from (Succ n)))
+let rec from : nat -> nat _stream = fun n -> lazy (Cell (n, from (Succ n)))
 
 let naturals = from Zero
 
-let rec nth : nat -> 'a stream -> 'a = fun n s ->
+let rec nth : nat -> 'a _stream -> 'a = fun n s ->
   let Cell (hd, tl) = Lazy.force s in
   match n with
   | Zero -> hd
