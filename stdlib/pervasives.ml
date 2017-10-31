@@ -15,11 +15,6 @@
 
 (* type 'a option = None | Some of 'a *)
 
-(* Cotypes *)
-
-type codata = CODATA
-type 't query = QUERY
-
 (* Exceptions *)
 
 external register_named_value : string -> 'a -> unit

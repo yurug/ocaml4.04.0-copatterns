@@ -462,29 +462,6 @@ let package_type_of_module_type pmty =
       err pmty.pmty_loc
         "only module type identifier and 'with type' constraints are supported"
 
-(* Concerning type names with a bang :
-   - An abstract type can start with a bang, or not.
-   - A cotype starts with a bang.
-   - Otherwise, it should not start with a bang.
-*)
-
-let check_type_identifier id term = function
-  | Ptype_abstract -> ()
-  | Ptype_cotype _ ->
-     if not (id.[0] = '!') then expecting term "bang (\"!\")"
-  | _ ->
-     if id.[0] = '!' then not_expecting term "bang (\"!\")"
-
-let expecting_cotype loc =
-  raise Syntaxerr.(Error (Expecting (loc,"cotype")))
-
-let check_constr_is_cotype core_ty = match core_ty.ptyp_desc with
-  | Ptyp_constr (lid,_) ->
-     let id = Longident.last lid.txt in
-     if not (id.[0] = '!') then expecting_cotype core_ty.ptyp_loc
-  | _ ->
-     expecting_cotype core_ty.ptyp_loc
-
 (* Handle nested copattern matching. *)
 
 (* fixme: transfer this part in MNTSA.ml.
@@ -2312,7 +2289,6 @@ type_declaration:
     TYPE ext_attributes nonrec_flag optional_type_parameters type_lident
     type_kind constraints post_item_attributes
       { let (kind, priv, manifest) = $6 in
-        check_type_identifier $5 5 kind;
         let (ext, attrs) = $2 in
         let ty =
           Type.mk (mkrhs $5 5) ~params:$4 ~cstrs:(List.rev $7) ~kind
@@ -2325,13 +2301,11 @@ and_type_declaration:
     AND attributes optional_type_parameters type_lident type_kind constraints
     post_item_attributes
       { let (kind, priv, manifest) = $5 in
-        check_type_identifier $4 4 kind;
         Type.mk (mkrhs $4 4) ~params:$3 ~cstrs:(List.rev $6)
             ~kind ~priv ?manifest ~attrs:($2@$7) ~loc:(symbol_rloc ())
             ~text:(symbol_text ()) ~docs:(symbol_docs ()) }
 ;
 type_lident:
-    BANG LIDENT                { "!" ^ $2 }
   | LIDENT                     { $1 }
 ;
 constraints:
@@ -2495,7 +2469,6 @@ colabel_declaration:
   | colabel COLON poly_type_no_attr attributes LESSMINUS
         simple_core_type attributes
       {
-       check_constr_is_cotype $6;
        Type.cofield (mkrhs $1 1) $3 ~attrs:($4 @ $7) ~index:$6
           ~loc:(symbol_rloc()) ~info:(symbol_info ())
       }
@@ -2514,7 +2487,6 @@ colabel_declaration_semi:
   | colabel COLON poly_type_no_attr attributes LESSMINUS
       simple_core_type SEMI attributes
         {
-         check_constr_is_cotype $6;
          let info =
            match rhs_info 4 with
            | Some _ as info_before_semi -> info_before_semi
@@ -2875,7 +2847,6 @@ label_longident:
 ;
 type_longident:
     LIDENT                                      { Lident $1 }
-  | BANG LIDENT                                 { Lident ("!" ^ $2) }
   | mod_ext_longident DOT LIDENT                { Ldot($1, $3) }
 ;
 mod_longident:

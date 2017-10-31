@@ -24,9 +24,6 @@
    name, without prefixing them by [Pervasives].
 *)
 
-type codata = CODATA
-type 't query = QUERY
-
 (** {6 Exceptions} *)
 
 external raise : exn -> 'a = "%raise"

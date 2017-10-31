@@ -205,7 +205,7 @@ module Unnest = struct
   (* We create a coverage pattern that will drive the algorithm.
      It is not complete but remains safe since :
      - we do not extend the pattern matching with extra cases.
-     - the completude will be checked by OCaml type checker.
+     - the coverage will be checked by the OCaml type checker.
   *)
 
   let plug_variables0 xs =
@@ -373,8 +373,14 @@ module QTree = struct
     in aux [] qt tks
 
   let unnest = function
-    | [] -> assert false        (* by parsing *)
-    | tks :: tl -> List.fold_left insert (init [] tks) tl
+    | [] ->
+        let qmatch = QMatch {qpath = []; qcases = []; extra = 0} in
+        qtree [] qmatch
+    | tks :: tl ->
+        List.fold_left insert (init [] tks) tl
+
+  let unnest xs = unnest (List.rev xs) (* fixme *)
+
 
   let collect_and_plug qt cocase  =
     let open S in
@@ -473,13 +479,13 @@ module Trans = struct
 
   open Ast_helper
 
-  let codata_type =
-    let name = mknoloc_lid "Pervasives.codata"
-    in Typ.constr name []
+  (* let codata_type = *)
+  (*   let name = mknoloc_lid "Pervasives.codata" *)
+  (*   in Typ.constr name [] *)
 
-  let query_type res =
-    let name = mknoloc_lid "Pervasives.query" in
-    Typ.constr name [res]
+  (* let query_type res = *)
+  (*   let name = mknoloc_lid "Pervasives.query" in *)
+  (*   Typ.constr name [res] *)
 
   let dispatch = "dispatch"
 
@@ -500,23 +506,6 @@ module Trans = struct
     if l = 0 then ""
     else String.(sub s 1 (pred l))
 
-  let skip_bang s =
-    assert (s.[0] = '!');
-    string_tail s
-
-  (* A type constructor whose name starts with a bang has its parameters
-     expanded with the codata type.
-  *)
-
-  let type_constr core_type_mapper lid core_tys =
-    let last_lid = Longident.last lid.txt in
-    if last_lid.[0] = '!' then
-      let new_lid = map_last_lid skip_bang lid.txt in
-      let new_params = codata_type :: (core_type_mapper <$> core_tys) in
-      Ptyp_constr (Location.mkloc new_lid lid.loc, new_params)
-    else
-      Ptyp_constr (lid, core_type_mapper <$> core_tys)
-
   (* FIXME #doc *)
 
   let lower_first_char s =
@@ -526,27 +515,39 @@ module Trans = struct
     let new_lid = map_last_lid lower_first_char d.txt in
     Pexp_apply (Exp.ident {d with txt = new_lid}, [(Nolabel, expr)])
 
+  (* [upper_fc s] returns a fresh string s with its first char translated to
+     uppercase. *)
+
+  let upper_fc s =
+    let b = Bytes.of_string s in
+    Bytes.set b 0 (Char.uppercase_ascii s.[0]);
+    Bytes.to_string b
+
+  (* [to_obs lid_loc] returns a frehs lid with its last string extended with
+     "_obs"
+  *)
+
+  let to_obs ty_lid =
+    {ty_lid with txt = map_last_lid (fun s -> s ^ "_obs") ty_lid.txt}
+
   (* FIXME #doc *)
 
-  let ty_variant td =
-    let ty_name = skip_bang td.S.ptype_name.txt in
+  let ty_variant core_type_mapper td =
+    let ty_name = td.S.ptype_name.txt in
     let uname = {
-      td.S.ptype_name with txt = String.uppercase_ascii ty_name
+      td.S.ptype_name with txt = upper_fc ty_name
     } in
     let lid = mknoloc_lid ty_name in
-    let params = List.map (fun _ ->
-        Typ.var (Gen.var ())
-      ) td.S.ptype_params
-    in
+    let params = fst <$> (core_type_mapper <$ td.S.ptype_params) in
     let fresh_out = Gen.var () in
     let out_var = Typ.var fresh_out in
-    let query = query_type out_var in
-    let arrow_ty = Typ.(arrow Nolabel (constr lid (query :: params)) out_var) in
+    let arrow_ty = Typ.(
+        arrow Nolabel (constr (to_obs lid) (out_var :: params)) out_var
+      ) in
     let poly_arrow = Typ.poly [fresh_out] arrow_ty in
     let field = Type.field dispatch_id poly_arrow in
     let args = Pcstr_record [field] in
-    let res = Typ.constr lid (codata_type :: params) in
-    Type.constructor uname ~args ~res
+    Type.constructor uname ~args
 
   (* FIXME #doc *)
 
@@ -554,15 +555,33 @@ module Trans = struct
     let new_ty = core_type_mapper ty in
     let (lid, params) = from_typ_constr new_ty.ptyp_desc in
     let new_output_ty = core_type_mapper output_ty in
-    Ptyp_constr (mknoloc lid.txt, query_type new_output_ty :: params)
+    Ptyp_constr (mknoloc lid.txt, new_output_ty :: params)
 
   (* FIXME #doc *)
 
-  let cotype attributes_mapper core_type_mapper td lds =
-    let tname = skip_bang td.S.ptype_name.txt in
+  let cotype attributes_mapper core_type_mapper td =
+    let tname = td.S.ptype_name.txt in
+    let ptype_kind = Ptype_variant [ty_variant core_type_mapper td] in
+    let ptype_params = core_type_mapper <$ td.S.ptype_params in
+    let ptype_cstrs = List.map (fun (c_ty1, c_ty2, var) ->
+        (core_type_mapper c_ty1, core_type_mapper c_ty2, var)
+      ) td.S.ptype_cstrs
+    in
+    { ptype_name = Location.mkloc tname td.S.ptype_loc;
+      ptype_params;
+      ptype_cstrs;
+      ptype_kind;
+      ptype_private = td.S.ptype_private;
+      ptype_manifest = map_option core_type_mapper td.S.ptype_manifest;
+      ptype_attributes = attributes_mapper td.S.ptype_attributes;
+      ptype_loc = td.S.ptype_loc;
+    }
+
+  let _cotype_obs attributes_mapper core_type_mapper td lds =
+    let tname = td.S.ptype_name.txt in
     let params = fst <$> td.S.ptype_params in
     let constructor cld =
-      let query = query_type (core_type_mapper cld.S.pcld_type) in
+      let query = core_type_mapper cld.S.pcld_type in
       let (new_name, params) = match cld.S.pcld_index with
         | None ->
             (None, core_type_mapper <$> params)
@@ -574,20 +593,20 @@ module Trans = struct
         | None ->
             mknoloc_lid tname
         | Some name ->
-            { name with txt = map_last_lid skip_bang name.txt }
+            name
       in
-      let res = Typ.constr lid (query :: params) in
+      let res = Typ.constr (to_obs lid) (query :: params) in
       Type.constructor ~res cld.S.pcld_name
     in
     let constructors = constructor <$> lds in
-    let ptype_kind = Ptype_variant (ty_variant td :: constructors) in
+    let ptype_kind = Ptype_variant (constructors) in
     let ptype_params0 = core_type_mapper <$ td.S.ptype_params in
     let ptype_params1 = (Typ.any (), Invariant) :: ptype_params0 in
     let ptype_cstrs = List.map (fun (c_ty1, c_ty2, var) ->
         (core_type_mapper c_ty1, core_type_mapper c_ty2, var)
       ) td.S.ptype_cstrs
     in
-    { ptype_name = Location.mkloc tname td.S.ptype_loc;
+    { ptype_name = Location.mkloc (tname ^ "_obs") td.S.ptype_loc;
       ptype_params = ptype_params1;
       ptype_cstrs;
       ptype_kind;
@@ -596,6 +615,7 @@ module Trans = struct
       ptype_attributes = attributes_mapper td.S.ptype_attributes;
       ptype_loc = td.S.ptype_loc;
     }
+
 
   (* [getters ty_name clds] returns a set of getters corresponding to
      the colabels. For instance, calling [getters stream [head;tail]]
@@ -606,7 +626,8 @@ module Trans = struct
   *)
 
   let getters {txt = ty_name} clds =
-    let uname = Longident.parse (String.uppercase_ascii (skip_bang ty_name)) in
+    let ty_lid = Longident.parse ty_name in
+    let uname =  map_last_lid upper_fc ty_lid in
     let rec_pat = Pat.record [(dispatch_lid, Pat.var dispatch_id)] Closed in
     let cons_pat = Pat.construct (mknoloc uname) (Some rec_pat) in
     let getter {S.pcld_name} =
@@ -692,23 +713,18 @@ module Trans = struct
     let output_var = Gen.var () in
     let output_lid = mknoloc (Longident.parse output_var) in
     let output_typ = Typ.constr output_lid [] in
-    let query = query_type output_typ in
-    let new_typ_constr = Typ.constr lid (query :: params) in
+    let new_typ_constr = Typ.constr (to_obs lid) (output_typ :: params) in
     let result_type = Typ.arrow Nolabel new_typ_constr output_typ in
     (output_var, result_type)
 
   (* FIXME #doc *)
 
   let finalizer lid =
-    let uname = mknoloc (map_last_lid String.uppercase_ascii lid) in
+    let uname = mknoloc (map_last_lid upper_fc lid) in
     let drpat = Exp.record [(dispatch_lid, Exp.ident dispatch_lid)] None in
     Exp.construct uname (Some drpat)
 
   (* FIXME #doc *)
-
-  let skip_codata = function
-    | [] -> invalid_arg "skip_codata"
-    | p::ps -> assert (p = codata_type); ps
 
   let funs args expr =
     List.fold_right (fun (pat,ty) acc -> match ty with
@@ -752,7 +768,6 @@ module Trans = struct
       | Some ty -> result_typ ty.ptyp_desc
     in
     let (ty_name, params) = from_typ_constr res_ty in
-    let params = skip_codata params in
     let body = Exp.function_ cases in
     let dispatch_vb = mk_dispatch ty_name params body in
     let lazy_vbs = match lazy_info with
@@ -774,27 +789,33 @@ module Trans = struct
             Exp.constraint_ id (core_typ_mapper ty)
       ) qmatch.qpath
     in
-    if List.length new_path = 0 then
-      match qmatch.qcases with
-      | [([],e)] -> expr_mapper e
-      | _ -> assert false (* by construction *)
-    else
-      let exp = match new_path with
-        | [] -> assert false
-        | [x] -> x
-        | xs -> Exp.tuple xs
-      in
-      let mk_case (ps,e) = match pattern_mapper <$> ps with
-        | [] -> assert false
-        | [p] -> Exp.case p (expr_mapper e)
-        | ps -> Exp.case (Pat.tuple ps) (expr_mapper e)
-      in
-      let cases = List.map mk_case qmatch.qcases in
-      let pat_path = List.map (fun (x,ty) ->
-          (Pat.var (mknoloc x), map_option core_typ_mapper ty)
-        ) qt.path
-      in
-      funs pat_path (Exp.match_ exp cases)
+    match new_path with
+    | [] -> begin match qmatch.qcases with
+        | [] -> assert false (* by construction *)
+        (* cases = .. -> e *)
+        | ([],e) :: xs ->
+            if List.length xs > 0 then
+              Location.prerr_warning e.S.pexp_loc Warnings.Unused_match;
+            expr_mapper e
+        | _ -> assert false
+      end
+    | _ ->
+        let exp = match new_path with
+          | [] -> assert false
+          | [x] -> x
+          | xs -> Exp.tuple xs
+        in
+        let mk_case (ps,e) = match pattern_mapper <$> ps with
+          | [] -> assert false
+          | [p] -> Exp.case p (expr_mapper e)
+          | ps -> Exp.case (Pat.tuple ps) (expr_mapper e)
+        in
+        let cases = List.map mk_case qmatch.qcases in
+        let pat_path = List.map (fun (x,ty) ->
+            (Pat.var (mknoloc x), map_option core_typ_mapper ty)
+          ) qt.path
+        in
+        funs pat_path (Exp.match_ exp cases)
 
   let deploy_qtree core_typ_mapper is_lazy qt xs aux =
     let open QTree in
@@ -885,7 +906,7 @@ and core_type_desc = function
   | S.Ptyp_tuple core_tys ->
       Ptyp_tuple (core_type <$> core_tys)
   | S.Ptyp_constr (lid, core_tys) ->
-      Trans.type_constr core_type lid core_tys
+      Ptyp_constr (lid, core_type <$> core_tys)
   | S.Ptyp_object (fields, flag) ->
       let field (s, atts, core_ty) = (s, attributes atts, core_type core_ty) in
       Ptyp_object (field <$> fields, flag)
@@ -1068,7 +1089,8 @@ and value_description vd = {
 
 (* Type declarations *)
 
-and type_declarations tds = type_declaration <$> tds
+and type_declarations tds =
+  tds >>= type_declaration
 
 and type_declaration_getters td = match td.S.ptype_kind with
   | S.Ptype_cotype lds ->
@@ -1077,14 +1099,17 @@ and type_declaration_getters td = match td.S.ptype_kind with
       []
 
 and type_declaration td = match td.S.ptype_kind with
-  | S.Ptype_cotype lds ->
-      Trans.cotype attributes core_type td lds
+  | S.Ptype_cotype lds -> [
+      Trans.cotype attributes core_type td;
+      Trans._cotype_obs attributes core_type td lds;
+    ]
+
   | _ ->
       let ptype_params = core_type <$ td.S.ptype_params in
       let ptype_cstrs = List.map (fun (c_ty1, c_ty2, var) ->
           (core_type c_ty1, core_type c_ty2, var)
         ) td.S.ptype_cstrs in
-      {
+      [{
         ptype_name = td.S.ptype_name;
         ptype_params;
         ptype_cstrs;
@@ -1093,7 +1118,7 @@ and type_declaration td = match td.S.ptype_kind with
         ptype_manifest = map_option core_type td.S.ptype_manifest;
         ptype_attributes = attributes td.S.ptype_attributes;
         ptype_loc = td.S.ptype_loc;
-      }
+      }]
 
 and type_declaration_with_constraint td =
   let ptype_params = core_type <$ td.S.ptype_params in
