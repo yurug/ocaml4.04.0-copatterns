@@ -8,11 +8,11 @@ let rec from : nat -> nat _stream = fun n -> lazy (Cell (n, from (Succ n)))
 
 let naturals = from Zero
 
-let rec nth : nat -> 'a _stream -> 'a = fun n s ->
+let rec _nth : nat -> 'a _stream -> 'a = fun n s ->
   let Cell (hd, tl) = Lazy.force s in
   match n with
   | Zero -> hd
-  | Succ m -> nth m tl
+  | Succ m -> _nth m tl
 
 type 'a stream = {
   Head : 'a;
@@ -27,7 +27,6 @@ let rec nth n s = match n with
   | Zero -> s#Head
   | Succ m -> nth m s#Tail
 
-
 let corec map2 : type a b c. (a -> b -> c) -> a stream -> b stream -> c stream with
   | (.. f s1 s2)#Head -> f s1#Head s2#Head
   | (.. f s1 s2)#Tail -> map2 f s1#Tail s2#Tail
@@ -40,11 +39,11 @@ let corec fib : int stream with
    | ..#Tail#Head -> 1
    | ..#Tail#Tail -> map2 ( + ) fib fib#Tail
 
-let corec lazy fib : int stream with
+let corec lazy lazy_fib : int stream with
    | ..#Head -> 0
    | ..#Tail : int stream with
    | ..#Tail#Head -> 1
-   | ..#Tail#Tail -> map2 ( + ) fib fib#Tail
+   | ..#Tail#Tail -> map2 ( + ) lazy_fib lazy_fib#Tail
 
 let corec cycle : nat -> nat stream with
    | (.. n)#Head -> n
@@ -99,3 +98,26 @@ let update (type a) (d1 : a loc_obs) (x : a) (Loc {dispatch}) =
      | Some Eq -> x
      | _ -> dispatch d2
    in Loc {dispatch}
+
+(* Benchmarks for lazy copattern matching. *)
+
+let rec get n s = if n = 0 then s#Head else get (pred n) s#Tail
+
+let bench f = Unix.(
+    let start = Unix.gettimeofday () in
+    let y = f () in
+    let stop = Unix.gettimeofday () in
+    (y, stop -. start)
+  )
+
+let show_fib is_lazy n =
+  let f = if is_lazy then lazy_fib else fib in
+  let name = if is_lazy then "lazy fib" else "fib" in
+  let (r,t) = bench (fun () -> get n f) in
+  Printf.printf "%s (%d) = %d [in %f seconds]\n" name n r t
+
+let () =
+  show_fib false 10;
+  show_fib true 10;
+  show_fib false 30;
+  show_fib true 30;
